@@ -1,0 +1,40 @@
+{
+  "$schema": "./schemas/pi-extends.schema.json",
+  "version": 1,
+  "theme": "pi-carbon",
+  "currentModel": {
+    "model": "anthropic/claude-sonnet-4-5",
+    "thinking": "high"
+  },
+  "roles": {
+    "scout": {
+      "model": "google/gemini-2.5-flash",
+      "thinking": "low",
+      "tools": ["read", "grep", "find", "ls"]
+    },
+    "planner": {
+      "model": "openai/gpt-5.2",
+      "thinking": "high",
+      "tools": ["read", "grep", "find", "ls"]
+    },
+    "worker": {
+      "model": "anthropic/claude-sonnet-4-5",
+      "thinking": "high",
+      "tools": ["read", "bash", "edit", "write"]
+    },
+    "reviewer": {
+      "model": "openai/gpt-5.2",
+      "thinking": "high",
+      "tools": ["read", "grep", "find", "ls"]
+    }
+  },
+  "providers": [],
+  "subagents": {
+    "maxParallelTasks": 8,
+    "maxConcurrency": 4
+  },
+  "goal": {
+    "defaultMode": "focused",
+    "maxAutoTurns": 5
+  }
+}
