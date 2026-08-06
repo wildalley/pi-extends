@@ -7,6 +7,12 @@ import assert from "node:assert/strict";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { MenuList } from "../extensions/pi-extends/ui-kit.ts";
 
+/** 选中行带反显控制码，量列宽前先去掉。 */
+function stripAnsi(s: string): string {
+	// eslint-disable-next-line no-control-regex
+	return s.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
 function fakeTheme(): any {
 	return {
 		fg: (_c: string, t: string) => t,
@@ -20,11 +26,11 @@ function fakeTheme(): any {
 }
 
 const ITEMS = [
-	{ id: "theme", group: "外观", label: "主题" },
-	{ id: "footer", group: "外观", label: "状态栏" },
-	{ id: "model", group: "模型", label: "主模型" },
-	{ id: "roles", group: "模型", label: "角色权限" },
-	{ id: "goal", group: "工作流", label: "Goal 模式" },
+	{ id: "theme", group: "外观", label: "主题", hotkey: "1", value: "pi-carbon" },
+	{ id: "footer", group: "外观", label: "状态栏", hotkey: "2", value: "on" },
+	{ id: "model", group: "模型", label: "主模型", hotkey: "3", value: "claude-opus-4" },
+	{ id: "roles", group: "模型", label: "角色权限", hotkey: "4", value: "0/4" },
+	{ id: "goal", group: "工作流", label: "Goal 模式", hotkey: "5", value: "off" },
 ];
 
 function build(opts: Partial<Record<string, unknown>> = {}) {
@@ -149,4 +155,49 @@ test("滚轮移动光标", () => {
 	const row = lines.findIndex((l) => l.includes("状态栏"));
 	menu.clickAt(row, 10);
 	assert.deepEqual(selected, ["footer"]);
+});
+
+test("切栏不改变卡片高度：项少的栏用空行补齐", () => {
+	const { menu } = build();
+	// 外观两项、模型两项、工作流一项，高度必须按最多的那一栏固定。
+	const heights: number[] = [];
+	for (let i = 0; i < 3; i++) {
+		heights.push(menu.render(80).length);
+		menu.handleInput("\t");
+	}
+	assert.equal(new Set(heights).size, 1, `切栏后高度变了: ${heights.join(" / ")}`);
+});
+
+test("切栏不改变列宽：按全部项算一次，不按当前栏重算", () => {
+	const { menu } = build();
+	// 数值列右对齐，所以「一行去掉行尾空白后的宽度」就是数值列的右边界。
+	// 只按当前栏算列宽的话，这个边界会随栏里最长的标签/数值来回缩放，文字左右横跳。
+	const edges: number[] = [];
+	for (let i = 0; i < 3; i++) {
+		const row = menu
+			.render(80)
+			.map((l) => stripAnsi(l))
+			.find((l) => /^[›\s]\s*\d\s+\S/.test(l));
+		assert.ok(row, "每一栏都应有带快捷键的项");
+		// 中日韩字符占两列，所以量的是显示宽度而不是字符数。
+		edges.push(visibleWidth(row.trimEnd()));
+		menu.handleInput("\t");
+	}
+	assert.equal(new Set(edges).size, 1, `切栏后数值列位置变了: ${edges.join(" / ")}`);
+});
+
+test("快捷键跨栏：按别的栏的键会先切过去再选中", () => {
+	const { menu, selected } = build();
+	// 停在「外观」栏，按 5（工作流栏的 Goal 模式）。
+	menu.handleInput("5");
+	assert.deepEqual(selected, ["goal"], "快捷键不该因为停在别的栏而失灵");
+	assert.ok(menu.render(80).join("\n").includes("Goal 模式"), "应已切到该项所在栏");
+});
+
+test("搜索态下不吞快捷键当切栏用", () => {
+	const { menu, selected } = build({ search: "always" });
+	for (const ch of "模型") menu.handleInput(ch);
+	// 搜索时数字是搜索词的一部分，不该触发跳转。
+	menu.handleInput("5");
+	assert.deepEqual(selected, [], "搜索态下数字应进搜索词");
 });

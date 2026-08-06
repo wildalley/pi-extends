@@ -504,16 +504,27 @@ Plan 与 Goal 同时使用时：
   未选中的直达键从 `borderMuted` 改为 `dim`（深色终端上约 2.2:1 → 3.7:1）。
 - 新增 coding plan 目录：列出内置厂商对应的订阅套餐、认证方式与环境变量名，
   认证能力现从 provider 对象读取而不是写死枚举。
-- 新增自动分工（见 4.4），并在 cockpit「工作流」栏给出模式与阈值入口。
+- 新增自动分工（见 4.4），并在 cockpit「自动化」栏给出模式与阈值入口。
+- 分栏几何固定：列表区高度与列宽按全部条目算一次，项少的栏补空行 —— 否则
+  切一次 tab 整张卡片连底部提示行一起上下蹦、标签与数值列左右横跳。
+  分组同时按条数配平（2/5/4/3/3），最空的一栏只补三行。
+- 快捷键改为跨栏生效：按到别栏的键先切栏再选中。卡片上写着 `3`，
+  不该因为「你正好停在外观栏」而失灵。
+- `borderMuted` 不再用于上色：实测它对各主题**自己的页面背景**只有 1.30–2.48:1
+  （pi-carbon 1.36 / pi-sakura 1.30），分隔点、进度条空槽、翻页箭头、空勾选框
+  曾经全用它，等于这些唯一提示一个都看不见。统一改 `dim`（4.29–8.63:1），
+  并新增源码级断言防回归。进度条实心段与空槽改用密度不同的 `█` / `░`，
+  不靠颜色区分填到哪儿。
 - 加载链起点由 `defaultConfig()` 改为 `emptyBase()`：`roles`/`routes` 未配置就是
   未配置，删除操作不会被默认值填回来；`/config generate` 仍产出完整模板。
 
-完成标准：卡片每行显示宽度精确等于卡片宽度且不含边框字符；overlay 不裁掉底部提示行；
-普通消息不会触发自动分工。
+完成标准：卡片每行显示宽度精确等于卡片宽度且不含边框字符；切栏前后高度与列宽不变；
+overlay 不裁掉底部提示行；普通消息不会触发自动分工。
+排版改动用 `tools/preview-cockpit.ts` 拿真实主题渲染肉眼复核 —— 对齐能断言，好不好看不能。
 
 ## 14. 测试计划
 
-### 单元测试（已落地 121 条，`npm test`）
+### 单元测试（已落地 126 条，`npm test`）
 
 - 默认配置和深度合并（`config.test.ts`）。
 - 无效 JSON、错误字段和旧版本配置（`config.test.ts`）。
@@ -530,7 +541,8 @@ Plan 与 Goal 同时使用时：
   重复词只计一次、有分必有理由（`orchestration.test.ts`）。
 - 卡片 tab 切换、鼠标点击命中与说明行位置固定（`ui-kit-tabs.test.ts`、
   `ui-kit-render.test.ts`、`mouse.test.ts`、`mouse-lifecycle.test.ts`）。
-- 主题在 selectedBg 上的对比度（`ui-kit-contrast.test.ts`）。
+- 主题在 selectedBg 上的对比度、源码不再用 `borderMuted` 上色（`ui-kit-contrast.test.ts`）。
+- 切栏后卡片高度与列宽不变、快捷键跨栏生效（`ui-kit-tabs.test.ts`）。
 - coding plan 目录的 provider id 与环境变量名对得上上游（`plans.test.ts`）。
 - 配置作用域与项目/用户级覆盖（`store-scope.test.ts`）。
 

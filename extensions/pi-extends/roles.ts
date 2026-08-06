@@ -16,7 +16,7 @@ import {
 } from "./pickers.ts";
 import { editConfig } from "./config-ui.ts";
 import { getConfig } from "./store.ts";
-import { kv, runMenu, type MenuItem } from "./ui-kit.ts";
+import { kv, runMenu, sep, type MenuItem } from "./ui-kit.ts";
 
 export function describeRole(config: PiExtendsConfig, role: RoleName): string {
 	const rc = config.roles[role];
@@ -76,7 +76,7 @@ function roleStatus(theme: Theme, config: PiExtendsConfig, role: RoleName): stri
 	const inherited = theme.fg("dim", "  继承");
 	const tools = resolveRoleTools(config, role)
 		.map((t) => theme.fg(WRITE_TOOLS.has(t) ? "warning" : "text", t))
-		.join(theme.fg("borderMuted", " · "));
+		.join(sep(theme, false));
 	return [
 		kv(
 			theme,
@@ -90,7 +90,7 @@ function roleStatus(theme: Theme, config: PiExtendsConfig, role: RoleName): stri
 			"思考",
 			theme.fg(thinkingTone(thinking), thinking) +
 				(rc.thinking ? "" : inherited) +
-				theme.fg("borderMuted", "  ·  ") +
+				sep(theme) +
 				theme.fg("dim", THINKING_HINTS[thinking]),
 		),
 		kv(theme, "◇", "工具", tools + (rc.tools ? "" : inherited)),

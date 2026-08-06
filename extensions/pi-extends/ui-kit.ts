@@ -74,7 +74,26 @@ export function badge(theme: Theme, text: string, tone: ThemeColor = "accent"): 
 	return theme.fg(tone, `[${text}]`);
 }
 
-/** 横向进度条，用于上下文占比、轮次配额等比例量。 */
+/**
+ * 同一行里并列几段信息时用的分隔点。
+ *
+ * 别再用 `borderMuted`：实测它对各主题自己的背景只有 1.30–2.48:1
+ * （pi-carbon 1.36、pi-sakura 1.30），也就是画了等于没画，一行里几段信息会糊成一句话。
+ * `dim` 是 4.29–8.63:1，看得见但仍比正文轻。分隔点两侧的内容因此不该也用 `dim`，
+ * 否则分不出哪个是内容哪个是间隔 —— 状态行的值请用 `muted` 或更亮。
+ */
+export function sep(theme: Theme, wide = true): string {
+	return theme.fg("dim", wide ? "  ·  " : " · ");
+}
+
+/**
+ * 横向进度条，用于上下文占比、轮次配额等比例量。
+ *
+ * 实心段和空槽用密度不同的两个字符（`█` / `░`）而不是同一个字符换颜色：
+ * 两段同形不同色时，一旦背景色偏亮或用户改了调色板，就分不出填到哪儿了。
+ * 两者都取自 Block Elements，不碰 box drawing —— 卡片本身是无边框的，
+ * 混进 `─` 会让「这张卡有没有画边框」不再能靠字符判断（见 ui-kit-render 的边框测试）。
+ */
 export function gauge(
 	theme: Theme,
 	ratio: number,
@@ -84,8 +103,8 @@ export function gauge(
 	const safe = Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0;
 	const filled = Math.round(safe * width);
 	return (
-		theme.fg(tone, "━".repeat(filled)) +
-		theme.fg("borderMuted", "━".repeat(Math.max(0, width - filled)))
+		theme.fg(tone, "█".repeat(filled)) +
+		theme.fg("dim", "░".repeat(Math.max(0, width - filled)))
 	);
 }
 
@@ -102,8 +121,10 @@ export interface KeyHint {
 /** 底部按键提示栏。 */
 export function renderHints(theme: Theme, hints: KeyHint[]): string {
 	return hints
-		.map((h) => `${theme.fg("accent", h.key)} ${theme.fg("dim", h.label)}`)
-		.join(theme.fg("borderMuted", "  ·  "));
+		// 说明文字用 muted 而不是 dim：分隔点已经占了 dim，两者同色就分不出
+		// 「这是一组 键+说明」还是「这是一串平铺的词」。
+		.map((h) => `${theme.fg("accent", h.key)} ${theme.fg("muted", h.label)}`)
+		.join(sep(theme));
 }
 
 export interface CardOptions {
@@ -492,6 +513,29 @@ export class MenuList implements Component {
 		return this.filtered[this.selected];
 	}
 
+	/**
+	 * 找按键对应的项，并保证它在当前可见集合里。
+	 *
+	 * 快捷键是跨栏的：分栏之前 `3` 就是主模型，分栏之后它不该因为「你正好停在外观栏」
+	 * 而失灵 —— 卡片上明明写着 `3`。命中别的栏就先切过去再选。
+	 * 同一个键在两栏里重复时，当前栏优先。
+	 */
+	private hotkeyTarget(data: string): MenuItem | undefined {
+		const inTab = this.filtered.find((i) => i.hotkey === data);
+		if (inTab) {
+			return inTab;
+		}
+		if (this.tabs.length === 0 || this.query) {
+			return undefined;
+		}
+		const anywhere = this.items.find((i) => i.hotkey === data);
+		if (!anywhere?.group) {
+			return undefined;
+		}
+		this.goToTab(this.tabs.indexOf(anywhere.group));
+		return this.filtered.includes(anywhere) ? anywhere : undefined;
+	}
+
 	private moveTo(index: number): void {
 		if (this.filtered.length === 0) {
 			return;
@@ -604,7 +648,7 @@ export class MenuList implements Component {
 			return;
 		}
 		if (!this.searching) {
-			const hit = this.filtered.find((i) => i.hotkey === data);
+			const hit = this.hotkeyTarget(data);
 			if (hit) {
 				this.moveTo(this.filtered.indexOf(hit));
 				if (this.opts.multi) {
@@ -636,6 +680,24 @@ export class MenuList implements Component {
 			this.applyFilter();
 			this.tui.requestRender();
 		}
+	}
+
+	/**
+	 * 分栏模式下列表区固定占多少行。
+	 *
+	 * 取各 tab 里项数最多的那个（再受 maxVisible 限制），不够的用空行补。
+	 * 不这么做的话「外观」两项、「工作流」七项，按一下 Tab 整张卡片连底部提示行
+	 * 一起上下蹦一截 —— tab 的用途就是快速来回切，切一次跳一次是最刺眼的那种毛病。
+	 */
+	private stableItemRows(): number {
+		if (this.tabs.length === 0 || this.query) {
+			return 0;
+		}
+		const most = this.tabs.reduce(
+			(max, tab) => Math.max(max, this.items.filter((i) => i.group === tab).length),
+			0,
+		);
+		return Math.min(this.opts.maxVisible, most);
 	}
 
 	private buildDisplay(): DisplayRow[] {
@@ -671,8 +733,7 @@ export class MenuList implements Component {
 		let col = 0;
 		this.tabs.forEach((name, i) => {
 			if (i > 0) {
-				const sep = theme.fg("borderMuted", " · ");
-				out += sep;
+				out += sep(this.theme, false);
 				col += 3;
 			}
 			const active = i === this.activeTab && !this.query;
@@ -713,7 +774,9 @@ export class MenuList implements Component {
 		const check = cols.check
 			? this.checked.has(item.id)
 				? theme.fg("success", "[✓] ")
-				: theme.fg(selected ? "text" : "borderMuted", "[ ] ")
+				// 空勾选框早先用 borderMuted，等于看不见 —— 多选菜单里「哪些没勾」
+				// 和「哪些勾了」一样是信息。
+				: theme.fg(selected ? "text" : "dim", "[ ] ")
 			: "";
 		const tone = onSelectedBg(item.tone ?? (selected ? "accent" : "text"), selected);
 		const labelText = padTo(labelOf(item), cols.label);
@@ -765,7 +828,11 @@ export class MenuList implements Component {
 			this.rowMap = map;
 			return lines;
 		}
-		const cols = menuColumns(this.filtered, inner, this.opts.multi ?? false);
+		// 分栏且未搜索时按全部项算列宽，而不是只按当前 tab 的项。
+		// 只按当前 tab 算的话，每切一次 tab 标签列和数值列都重新收缩一次，
+		// 文字会左右横跳；宽终端下本来就有余量，统一列宽的代价只是行尾少几列留白。
+		const forColumns = this.tabs.length > 0 && !this.query ? this.items : this.filtered;
+		const cols = menuColumns(forColumns, inner, this.opts.multi ?? false);
 		const indent = 2 + cols.hotkey + cols.check;
 		const display = this.buildDisplay();
 		const cursorAt = display.findIndex((r) => r.type === "item" && r.index === this.selected);
@@ -791,14 +858,21 @@ export class MenuList implements Component {
 				});
 			}
 		}
+		for (let i = end - start; i < this.stableItemRows(); i++) {
+			push("");
+		}
 		if (display.length > max) {
 			push(
 				splitRow(
-					theme.fg("borderMuted", `  ${start > 0 ? "▲" : " "}${end < display.length ? "▼" : " "}`),
+					// 箭头是「还有更多」的唯一提示，用 dim 而不是 borderMuted，后者看不见。
+					theme.fg("dim", `  ${start > 0 ? "▲" : " "}${end < display.length ? "▼" : " "}`),
 					theme.fg("dim", `${this.selected + 1}/${this.filtered.length}`),
 					inner,
 				),
 			);
+		} else if (this.stableItemRows() > 0) {
+			// 有的 tab 需要翻页行、有的不需要，这一行也得占住，否则高度还是会差一行。
+			push("");
 		}
 		// 说明文字固定占最后一行，不插在选中行下面。插在列表里的话，光标每移动一格，
 		// 说明行就跟着换位置，它下面的所有行都要错开一行 —— 看起来像整个列表在抖。

@@ -11,7 +11,7 @@ import {
 import { editConfig } from "./config-ui.ts";
 import { getAPI } from "./runtime.ts";
 import { getConfig } from "./store.ts";
-import { kv, runInfoPage } from "./ui-kit.ts";
+import { kv, runInfoPage, sep } from "./ui-kit.ts";
 
 export interface ProviderStatusLine {
 	id: string;
@@ -68,7 +68,7 @@ export async function providerStatusPage(ctx: ExtensionContext): Promise<void> {
 				theme.fg(r.authenticated ? "success" : "muted", r.authenticated ? "已认证" : "未认证"),
 				theme.fg("text", `${r.modelCount} 个模型`),
 				theme.fg("dim", r.custom ? "自定义" : r.displayName),
-			].join(theme.fg("borderMuted", "  ·  ")),
+			].join(sep(theme)),
 		),
 	);
 	await runInfoPage(ctx, {

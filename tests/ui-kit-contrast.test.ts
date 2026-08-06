@@ -8,6 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readdir, readFile } from "node:fs/promises";
 import { MenuList, onSelectedBg } from "../extensions/pi-extends/ui-kit.ts";
 
 const LOW_CONTRAST = ["dim", "thinkingOff", "borderMuted"] as const;
@@ -77,4 +78,29 @@ test("MenuList 选中行不使用在 selectedBg 上读不清的 tone", () => {
 	// 未选中的两项保留自己的 tone —— 弱化在非选中行是有意义的。
 	const second = log.find((e) => e.text.includes("第二项"));
 	assert.equal(second?.tone, "thinkingOff");
+});
+
+/**
+ * 不只是选中行的问题：borderMuted 对各主题**自己的页面背景**也只有
+ * pi-carbon 1.36 / pi-paper 1.51 / pi-contrast 2.48 / pi-sakura 1.30 / pi-terminal 1.91，
+ * 也就是画了等于没画。分隔点、进度条空槽、翻页箭头、空勾选框曾经全用它，
+ * 结果这些「唯一提示」在实际终端里一个都看不见。所以整个扩展不再用它上色，
+ * 只留它出现在 LOW_CONTRAST_ON_SELECTED 这个「黑名单」里。
+ */
+test("扩展源码不再用 borderMuted 上色", async () => {
+	const dir = new URL("../extensions/pi-extends/", import.meta.url);
+	const offenders: string[] = [];
+	for (const name of await readdir(dir)) {
+		if (!name.endsWith(".ts")) {
+			continue;
+		}
+		const src = await readFile(new URL(name, dir), "utf8");
+		src.split("\n").forEach((line, i) => {
+			// 注释里可以提它（解释为什么不用），上色不行。
+			if (/\bfg\(\s*"borderMuted"/.test(line)) {
+				offenders.push(`${name}:${i + 1}: ${line.trim()}`);
+			}
+		});
+	}
+	assert.deepEqual(offenders, [], `borderMuted 在这些地方被当颜色用了:\n${offenders.join("\n")}`);
 });

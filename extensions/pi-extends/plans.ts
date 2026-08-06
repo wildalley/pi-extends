@@ -20,7 +20,7 @@ import type {
 	ExtensionContext,
 	Theme,
 } from "@earendil-works/pi-coding-agent";
-import { kv, runInfoPage, runMenu, type MenuItem } from "./ui-kit.ts";
+import { kv, runInfoPage, runMenu, sep, type MenuItem } from "./ui-kit.ts";
 
 export interface CodingPlan {
 	/** pi 内置的 provider id，`/login` 和 modelRegistry 都用这个。 */
@@ -367,7 +367,7 @@ function statusSummary(theme: Theme, rows: PlanStatus[]): string[] {
 			"已开通",
 			ready.length === 0
 				? theme.fg("warning", "一个都没有 —— 选一项，回车照着做")
-				: `${theme.fg("success", `${ready.length} 家`)}${theme.fg("borderMuted", "  ·  ")}${theme.fg("text", `${models} 个模型可用`)}`,
+				: `${theme.fg("success", `${ready.length} 家`)}${sep(theme)}${theme.fg("text", `${models} 个模型可用`)}`,
 		),
 	];
 	if (ready.length > 0) {
@@ -376,7 +376,7 @@ function statusSummary(theme: Theme, rows: PlanStatus[]): string[] {
 				theme,
 				"▸",
 				"可用",
-				ready.map((r) => theme.fg("text", r.plan.id)).join(theme.fg("borderMuted", " · ")),
+				ready.map((r) => theme.fg("text", r.plan.id)).join(sep(theme, false)),
 			),
 		);
 	}
@@ -387,7 +387,7 @@ function statusSummary(theme: Theme, rows: PlanStatus[]): string[] {
 				theme,
 				"!",
 				"待排查",
-				`${stuck.map((r) => theme.fg("warning", r.plan.id)).join(theme.fg("borderMuted", " · "))}${theme.fg("dim", "  变量已设但未生效")}`,
+				`${stuck.map((r) => theme.fg("warning", r.plan.id)).join(sep(theme, false))}${theme.fg("dim", "  变量已设但未生效")}`,
 			),
 		);
 	}
@@ -503,7 +503,7 @@ function detailLines(theme: Theme, row: PlanStatus): string[] {
 				theme,
 				"$",
 				"变量",
-				`${theme.fg("text", plan.env)}${theme.fg("borderMuted", "  ·  ")}${theme.fg(row.envSet ? "success" : "dim", row.envSet ? "已设置" : "未设置")}`,
+				`${theme.fg("text", plan.env)}${sep(theme)}${theme.fg(row.envSet ? "success" : "dim", row.envSet ? "已设置" : "未设置")}`,
 			),
 		);
 	}

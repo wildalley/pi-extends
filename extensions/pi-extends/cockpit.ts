@@ -53,6 +53,7 @@ import {
 	runInfoPage,
 	runMenu,
 	runPrompt,
+	sep,
 	type MenuItem,
 } from "./ui-kit.ts";
 
@@ -94,7 +95,7 @@ function planLabel(): string {
 /** 控制台顶部状态区：模型 / 运行态 / 上下文，每次渲染都重新读取，切主题也会跟着变色。 */
 function statusLines(ctx: ExtensionCommandContext, theme: Theme): string[] {
 	const config = getConfig(ctx.cwd, ctx.isProjectTrusted());
-	const sep = theme.fg("borderMuted", "  ·  ");
+	const dot = sep(theme);
 	const level = config.currentModel.thinking;
 	const sessionModel = ctx.model ? modelIdOf(ctx.model) : undefined;
 	const authed = ctx.model ? ctx.modelRegistry.hasConfiguredAuth(ctx.model) : false;
@@ -106,7 +107,7 @@ function statusLines(ctx: ExtensionCommandContext, theme: Theme): string[] {
 	if (sessionModel && sessionModel !== config.currentModel.model) {
 		modelParts.push(theme.fg("dim", `配置 ${shortModel(config.currentModel.model)}`));
 	}
-	const lines = [kv(theme, "◆", "模型", modelParts.join(sep))];
+	const lines = [kv(theme, "◆", "模型", modelParts.join(dot))];
 
 	const goal = getGoalState();
 	const providers = collectProviderStatus(ctx, config);
@@ -121,7 +122,7 @@ function statusLines(ctx: ExtensionCommandContext, theme: Theme): string[] {
 				`${theme.fg("dim", "Plan")} ${theme.fg(plan === "off" ? "dim" : "warning", plan)}`,
 				`${theme.fg("dim", "子代理并行")} ${theme.fg("text", String(config.subagents.maxConcurrency))}`,
 				`${theme.fg("dim", "厂商")} ${theme.fg("text", `${providers.filter((p) => p.authenticated).length}/${providers.length}`)}`,
-			].join(sep),
+			].join(dot),
 		),
 	);
 
@@ -137,13 +138,21 @@ function statusLines(ctx: ExtensionCommandContext, theme: Theme): string[] {
 				[
 					`${gauge(theme, pct / 100, 12, tone)} ${theme.fg(tone, `${Math.round(pct)}%`)}`,
 					theme.fg("muted", `${fmtTokens(usage.tokens ?? 0)} / ${fmtTokens(usage.contextWindow)}`),
-				].join(sep),
+				].join(dot),
 			),
 		);
 	}
 	return lines;
 }
 
+/**
+ * 控制台的全部条目。`group` 就是 tab 名，tab 顺序按这里第一次出现的顺序排。
+ *
+ * 分组还兼顾条数：列表区的高度按「最多项的那一栏」固定，差得越多，
+ * 项少的那一栏空行就越多。所以 advisor / 关键词 / 自动分工 从「工作流」里分出来
+ * 单独一栏 —— 它们本来就是同一类（不用你开口，模型自己多做一步），
+ * 拆完 2/5/4/3/3，最空的一栏也只补三行。
+ */
 function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): MenuItem[] {
 	const goal = getGoalState();
 	const providers = collectProviderStatus(ctx, config);
@@ -259,7 +268,7 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 		},
 		{
 			id: "advisor",
-			group: "工作流",
+			group: "自动化",
 			icon: "▲",
 			label: "Advisor 旁审",
 			hotkey: "a",
@@ -269,7 +278,7 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 		},
 		{
 			id: "keywords",
-			group: "工作流",
+			group: "自动化",
 			icon: "✦",
 			label: "魔法关键词",
 			hotkey: "k",
@@ -279,7 +288,7 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 		},
 		{
 			id: "orchestration",
-			group: "工作流",
+			group: "自动化",
 			icon: "▨",
 			label: "自动分工",
 			hotkey: "d",
@@ -669,7 +678,7 @@ async function providersMenu(ctx: ExtensionCommandContext): Promise<void> {
 						theme,
 						p.authenticated ? "◉" : "○",
 						p.id,
-						`${theme.fg(p.authenticated ? "success" : "muted", p.authenticated ? "已认证" : "未认证")}${theme.fg("borderMuted", "  ·  ")}${theme.fg("dim", `${p.modelCount} 个模型`)}`,
+						`${theme.fg(p.authenticated ? "success" : "muted", p.authenticated ? "已认证" : "未认证")}${sep(theme)}${theme.fg("dim", `${p.modelCount} 个模型`)}`,
 					),
 				),
 			items: [
@@ -854,7 +863,7 @@ function goalStatusLines(theme: Theme, goal: ReturnType<typeof getGoalState>): s
 			theme,
 			"◈",
 			"状态",
-			`${theme.fg(goalTone(goal.status), goal.status)}${theme.fg("borderMuted", "  ·  ")}${theme.fg("dim", goal.strategy)}${theme.fg("borderMuted", "  ·  ")}${gauge(theme, goal.maxTurns > 0 ? goal.turnsUsed / goal.maxTurns : 0, 10)} ${theme.fg("muted", `${goal.turnsUsed}/${goal.maxTurns}`)}`,
+			`${theme.fg(goalTone(goal.status), goal.status)}${sep(theme)}${theme.fg("dim", goal.strategy)}${sep(theme)}${gauge(theme, goal.maxTurns > 0 ? goal.turnsUsed / goal.maxTurns : 0, 10)} ${theme.fg("muted", `${goal.turnsUsed}/${goal.maxTurns}`)}`,
 		),
 	];
 	if (goal.progress) {
@@ -997,7 +1006,7 @@ async function footerMenu(ctx: ExtensionCommandContext): Promise<void> {
 					theme,
 					"◈",
 					"状态",
-					`${theme.fg(on ? "success" : "dim", on ? "已启用" : "已关闭")}${theme.fg("borderMuted", "  ·  ")}${theme.fg(tps ? "success" : "dim", `TPS ${tps ? "on" : "off"}`)}`,
+					`${theme.fg(on ? "success" : "dim", on ? "已启用" : "已关闭")}${sep(theme)}${theme.fg(tps ? "success" : "dim", `TPS ${tps ? "on" : "off"}`)}`,
 				),
 			],
 			items: [
@@ -1069,7 +1078,7 @@ async function advisorMenu(ctx: ExtensionCommandContext): Promise<void> {
 					theme,
 					"◈",
 					"状态",
-					`${theme.fg(on ? "success" : "dim", on ? "已启用" : "已关闭")}${theme.fg("borderMuted", "  ·  ")}${theme.fg("dim", `阈值 ${config.advisor.minSeverity} · 本会话已出 ${advisorController.shown()} 条 / 上限 ${config.advisor.maxPerSession}`)}`,
+					`${theme.fg(on ? "success" : "dim", on ? "已启用" : "已关闭")}${sep(theme)}${theme.fg("dim", `阈值 ${config.advisor.minSeverity} · 本会话已出 ${advisorController.shown()} 条 / 上限 ${config.advisor.maxPerSession}`)}`,
 				),
 			],
 			items: [
@@ -1203,7 +1212,7 @@ async function orchestrationMenu(ctx: ExtensionCommandContext): Promise<void> {
 					theme,
 					"◐",
 					"当前",
-					`${theme.fg(mode === "off" ? "dim" : "success", ORCHESTRATION_MODE_HINTS[mode])}${theme.fg("borderMuted", "  ·  ")}${theme.fg("dim", `阈值 ${minComplexity} 分`)}`,
+					`${theme.fg(mode === "off" ? "dim" : "success", ORCHESTRATION_MODE_HINTS[mode])}${sep(theme)}${theme.fg("dim", `阈值 ${minComplexity} 分`)}`,
 				),
 			],
 			items: [

@@ -20,7 +20,7 @@ import {
 import { THINKING_HINTS, pickModelId, pickThinking, shortModel, thinkingTone } from "./pickers.ts";
 import { editConfig } from "./config-ui.ts";
 import { getConfig } from "./store.ts";
-import { kv, runMenu, type MenuItem } from "./ui-kit.ts";
+import { kv, runMenu, sep, type MenuItem } from "./ui-kit.ts";
 
 /** 有多少条路由显式配置了模型或 thinking。 */
 export function customizedRouteCount(config: PiExtendsConfig): number {
@@ -91,7 +91,7 @@ function routesStatus(theme: Theme, config: PiExtendsConfig): string[] {
 			"◈",
 			"已定制",
 			theme.fg(custom > 0 ? "success" : "dim", `${custom}/${ROUTE_NAMES.length}`) +
-				theme.fg("borderMuted", "  ·  ") +
+				sep(theme) +
 				theme.fg("dim", "未定制的路由沿回退链落到主模型"),
 		),
 	];
@@ -162,7 +162,7 @@ function editRouteStatus(theme: Theme, config: PiExtendsConfig, route: RouteName
 			"思考",
 			theme.fg(thinkingTone(resolved.thinking), resolved.thinking) +
 				(rc.thinking ? "" : theme.fg("dim", "  ← 继承")) +
-				theme.fg("borderMuted", "  ·  ") +
+				sep(theme) +
 				theme.fg("dim", THINKING_HINTS[resolved.thinking]),
 		),
 		kv(
@@ -170,8 +170,8 @@ function editRouteStatus(theme: Theme, config: PiExtendsConfig, route: RouteName
 			"◇",
 			"回退",
 			chain.length > 0
-				? chain.map((c) => theme.fg("text", c)).join(theme.fg("borderMuted", " → ")) +
-					theme.fg("borderMuted", " → ") +
+				? chain.map((c) => theme.fg("text", c)).join(theme.fg("dim", " → ")) +
+					theme.fg("dim", " → ") +
 					theme.fg("dim", "主模型")
 				: theme.fg("dim", "主模型"),
 		),
