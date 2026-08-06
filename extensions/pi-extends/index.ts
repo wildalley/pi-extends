@@ -3,9 +3,11 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { atomicWriteJson, resolveConfigPaths, sanitizeConfig } from "./config.ts";
+import { registerAdvisor } from "./advisor.ts";
 import { openCockpit } from "./cockpit.ts";
 import registerFooter from "./footer.ts";
 import goalModeExtension from "./goal-mode.ts";
+import { registerKeywords } from "./keywords.ts";
 import planModeExtension from "./plan-mode.ts";
 import { reapplyCustomProviders } from "./providers.ts";
 import { setAPI } from "./runtime.ts";
@@ -68,6 +70,26 @@ async function cmdAgents(args: string, ctx: ExtensionCommandContext): Promise<vo
 	await runSubagentLauncher(ctx, args);
 }
 
+async function cmdAdvisor(args: string, ctx: ExtensionCommandContext): Promise<void> {
+	const action = args.trim().toLowerCase();
+	const { advisorController, setAdvisorEnabled } = await import("./advisor.ts");
+	if (action === "on" || action === "off") {
+		await setAdvisorEnabled(ctx, action === "on");
+		ctx.ui.notify(`Advisor 旁审 ${action}。`, "info");
+		return;
+	}
+	if (action !== "") {
+		const config = getConfig(ctx.cwd, ctx.isProjectTrusted());
+		ctx.ui.notify(
+			`用法: /advisor [on|off]（当前 ${advisorController.isEnabled(config) ? "on" : "off"}）`,
+			"info",
+		);
+		return;
+	}
+	const { openAdvisorMenu } = await import("./cockpit.ts");
+	await openAdvisorMenu(ctx);
+}
+
 export default async function (pi: ExtensionAPI): Promise<void> {
 	setAPI(pi);
 
@@ -75,6 +97,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	planModeExtension(pi);
 	goalModeExtension(pi);
 	registerFooter(pi);
+	registerAdvisor(pi);
+	registerKeywords(pi);
 
 	pi.registerCommand("cockpit", {
 		description: "打开 Pi Extends 主控制台",
@@ -90,6 +114,17 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	pi.registerCommand("roles", {
 		description: "配置四个角色的模型、thinking 和工具权限",
 		handler: cmdRoles,
+	});
+	pi.registerCommand("routes", {
+		description: "按用途给模型分工：default/smol/slow/plan/commit/vision/designer/task/advisor/tiny",
+		handler: async (_args, ctx) => {
+			const { routesWizard } = await import("./routes.ts");
+			await routesWizard(ctx);
+		},
+	});
+	pi.registerCommand("advisor", {
+		description: "Advisor 旁审：/advisor [on|off]，不带参数打开设置",
+		handler: cmdAdvisor,
 	});
 	pi.registerCommand("agents", {
 		description: "运行单个、并行或串行子代理",

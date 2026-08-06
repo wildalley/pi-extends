@@ -17,6 +17,59 @@ export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 export const ROLE_NAMES = ["scout", "planner", "worker", "reviewer"] as const;
 export type RoleName = (typeof ROLE_NAMES)[number];
 
+/**
+ * 路由角色：按「用途」而不是「子代理身份」给模型分工，参考 oh-my-pi 的十条路由。
+ * 与 ROLE_NAMES（scout/planner/worker/reviewer 四个子代理人格）互不影响：
+ * 路由决定「这件事该用哪个模型」，人格决定「子代理拿到什么系统提示词」。
+ */
+export const ROUTE_NAMES = [
+	"default",
+	"smol",
+	"slow",
+	"plan",
+	"commit",
+	"vision",
+	"designer",
+	"task",
+	"advisor",
+	"tiny",
+] as const;
+export type RouteName = (typeof ROUTE_NAMES)[number];
+
+/** 每条路由的用途说明，供 cockpit 编辑页展示。 */
+export const ROUTE_LABELS: Record<RouteName, string> = {
+	default: "主线对话与编码",
+	smol: "轻量任务 · 便宜快速",
+	slow: "深思熟虑 · 难题攻坚",
+	plan: "规划与方案设计",
+	commit: "提交信息与变更摘要",
+	vision: "读图 / 截图理解",
+	designer: "UI 与视觉设计",
+	task: "子代理任务执行",
+	advisor: "旁审第二意见",
+	tiny: "标题、分类等极小请求",
+};
+
+/**
+ * 默认回退链：路由没配模型时按顺序往后找，最后落到 currentModel。
+ * default 不设回退，直接落到 currentModel。
+ */
+export const DEFAULT_ROUTE_FALLBACKS: Record<RouteName, RouteName[]> = {
+	default: [],
+	smol: ["default"],
+	slow: ["default"],
+	plan: ["slow", "default"],
+	commit: ["smol", "default"],
+	vision: ["default"],
+	designer: ["slow", "default"],
+	task: ["default"],
+	advisor: ["slow", "default"],
+	tiny: ["smol", "default"],
+};
+
+export const ADVISOR_SEVERITIES = ["aside", "concern", "blocker"] as const;
+export type AdvisorSeverity = (typeof ADVISOR_SEVERITIES)[number];
+
 export const BUILTIN_TOOLS = [
 	"read",
 	"grep",
@@ -66,6 +119,27 @@ export interface RoleConfig {
 	systemPrompt?: string;
 }
 
+/** 单条路由：首选模型 + thinking，以及未配置时的回退顺序。 */
+export interface RouteConfig {
+	model?: string;
+	thinking?: ThinkingLevel;
+	fallback?: RouteName[];
+}
+
+/** Advisor 旁审：每轮结束后让第二个模型只读复查，产出 aside/concern/blocker 卡片。 */
+export interface AdvisorConfig {
+	enabled: boolean;
+	/** 低于该等级的意见不展示。 */
+	minSeverity: AdvisorSeverity;
+	/** 单个会话最多展示多少条，避免刷屏。 */
+	maxPerSession: number;
+}
+
+/** 魔法关键词：输入里出现 ultrathink / orchestrate / workflowz 时改写这一轮的行为。 */
+export interface KeywordsConfig {
+	enabled: boolean;
+}
+
 export interface CurrentModelConfig {
 	model: string;
 	thinking: ThinkingLevel;
@@ -87,9 +161,12 @@ export interface PiExtendsConfig {
 	theme: string;
 	currentModel: CurrentModelConfig;
 	roles: Partial<Record<RoleName, RoleConfig>>;
+	routes: Partial<Record<RouteName, RouteConfig>>;
 	providers: CustomProviderConfig[];
 	subagents: SubagentLimitsConfig;
 	goal: GoalConfig;
+	advisor: AdvisorConfig;
+	keywords: KeywordsConfig;
 }
 
 export interface ConfigLoadResult {
@@ -108,6 +185,18 @@ export function isValidThinkingLevel(v: unknown): v is ThinkingLevel {
 export function isValidRoleName(v: unknown): v is RoleName {
 	return (
 		typeof v === "string" && (ROLE_NAMES as readonly string[]).includes(v)
+	);
+}
+
+export function isValidRouteName(v: unknown): v is RouteName {
+	return (
+		typeof v === "string" && (ROUTE_NAMES as readonly string[]).includes(v)
+	);
+}
+
+export function isValidAdvisorSeverity(v: unknown): v is AdvisorSeverity {
+	return (
+		typeof v === "string" && (ADVISOR_SEVERITIES as readonly string[]).includes(v)
 	);
 }
 
@@ -204,6 +293,26 @@ export function defaultConfig(): PiExtendsConfig {
 			defaultMode: "focused",
 			maxAutoTurns: 5,
 		},
+		routes: {
+			default: { model: "anthropic/claude-sonnet-4-5", thinking: "high" },
+			smol: { model: "google/gemini-2.5-flash", thinking: "low" },
+			slow: { model: "openai/gpt-5.2", thinking: "max" },
+			plan: { thinking: "high" },
+			commit: { thinking: "off" },
+			vision: { model: "google/gemini-2.5-flash", thinking: "low" },
+			designer: {},
+			task: { thinking: "medium" },
+			advisor: { thinking: "high" },
+			tiny: { model: "google/gemini-2.5-flash", thinking: "off" },
+		},
+		advisor: {
+			enabled: false,
+			minSeverity: "concern",
+			maxPerSession: 20,
+		},
+		keywords: {
+			enabled: true,
+		},
 	};
 }
 
@@ -276,6 +385,54 @@ function sanitizeRole(raw: unknown, warnings: string[], role: string): RoleConfi
 	const systemPrompt = asOptionalString(raw.systemPrompt, warnings, `roles.${role}.systemPrompt`);
 	if (systemPrompt !== undefined) {
 		result.systemPrompt = systemPrompt;
+	}
+	if (Object.keys(result).length === 0) {
+		return undefined;
+	}
+	return result;
+}
+
+function sanitizeRoute(raw: unknown, warnings: string[], route: string): RouteConfig | undefined {
+	if (raw === undefined || raw === null) {
+		return undefined;
+	}
+	if (!isPlainRecord(raw)) {
+		warnings.push(`routes.${route}: 期望对象，忽略无效值`);
+		return undefined;
+	}
+	const result: RouteConfig = {};
+	const model = asOptionalString(raw.model, warnings, `routes.${route}.model`);
+	if (model !== undefined) {
+		if (isValidModelId(model)) {
+			result.model = model;
+		} else {
+			warnings.push(`routes.${route}.model: 无效模型 ID "${model}"，忽略`);
+		}
+	}
+	const thinking = asOptionalString(raw.thinking, warnings, `routes.${route}.thinking`);
+	if (thinking !== undefined) {
+		if (isValidThinkingLevel(thinking)) {
+			result.thinking = thinking;
+		} else {
+			warnings.push(`routes.${route}.thinking: 未知 thinking level "${thinking}"，忽略`);
+		}
+	}
+	if (raw.fallback !== undefined) {
+		if (Array.isArray(raw.fallback)) {
+			const chain: RouteName[] = [];
+			for (const f of raw.fallback) {
+				if (!isValidRouteName(f)) {
+					warnings.push(`routes.${route}.fallback: 未知路由 "${String(f)}"，忽略`);
+				} else if (f === route) {
+					warnings.push(`routes.${route}.fallback: 不能回退到自己，忽略`);
+				} else if (!chain.includes(f)) {
+					chain.push(f);
+				}
+			}
+			result.fallback = chain;
+		} else {
+			warnings.push(`routes.${route}.fallback: 期望数组，忽略`);
+		}
 	}
 	if (Object.keys(result).length === 0) {
 		return undefined;
@@ -400,6 +557,45 @@ function sanitizeGoal(raw: unknown, base: GoalConfig, warnings: string[]): GoalC
 	};
 }
 
+function sanitizeAdvisor(raw: unknown, base: AdvisorConfig, warnings: string[]): AdvisorConfig {
+	if (raw === undefined) {
+		return base;
+	}
+	if (!isPlainRecord(raw)) {
+		warnings.push("advisor: 期望对象，忽略");
+		return base;
+	}
+	const enabled = asOptionalBool(raw.enabled, warnings, "advisor.enabled");
+	const severity = asOptionalString(raw.minSeverity, warnings, "advisor.minSeverity");
+	let minSeverity = base.minSeverity;
+	if (severity !== undefined) {
+		if (isValidAdvisorSeverity(severity)) {
+			minSeverity = severity;
+		} else {
+			warnings.push(`advisor.minSeverity: 未知等级 "${severity}"，忽略`);
+		}
+	}
+	return {
+		enabled: enabled ?? base.enabled,
+		minSeverity,
+		maxPerSession:
+			rawToPositiveInt(raw.maxPerSession, warnings, "advisor.maxPerSession") ?? base.maxPerSession,
+	};
+}
+
+function sanitizeKeywords(raw: unknown, base: KeywordsConfig, warnings: string[]): KeywordsConfig {
+	if (raw === undefined) {
+		return base;
+	}
+	if (!isPlainRecord(raw)) {
+		warnings.push("keywords: 期望对象，忽略");
+		return base;
+	}
+	return {
+		enabled: asOptionalBool(raw.enabled, warnings, "keywords.enabled") ?? base.enabled,
+	};
+}
+
 /**
  * 将原始配置整理为完整配置。未出现的字段从 `base` 继承，因此可以链式处理
  * 用户级配置（base=默认值）和项目级配置（base=用户级结果）实现逐字段覆盖。
@@ -472,6 +668,27 @@ export function sanitizeConfig(raw: unknown, base: PiExtendsConfig = defaultConf
 		}
 	}
 
+	const routes: Partial<Record<RouteName, RouteConfig>> = { ...base.routes };
+	if (raw.routes !== undefined) {
+		if (isPlainRecord(raw.routes)) {
+			for (const route of ROUTE_NAMES) {
+				if (raw.routes[route] !== undefined) {
+					const value = sanitizeRoute(raw.routes[route], warnings, route);
+					if (value !== undefined) {
+						routes[route] = { ...base.routes[route], ...value };
+					}
+				}
+			}
+			for (const key of Object.keys(raw.routes)) {
+				if (!isValidRouteName(key)) {
+					warnings.push(`routes: 未知路由 "${key}"，忽略`);
+				}
+			}
+		} else {
+			warnings.push("routes: 期望对象，忽略");
+		}
+	}
+
 	let providers: CustomProviderConfig[] = base.providers;
 	if (raw.providers !== undefined) {
 		if (Array.isArray(raw.providers)) {
@@ -490,6 +707,8 @@ export function sanitizeConfig(raw: unknown, base: PiExtendsConfig = defaultConf
 
 	const subagents = sanitizeSubagents(raw.subagents, base.subagents, warnings);
 	const goal = sanitizeGoal(raw.goal, base.goal, warnings);
+	const advisor = sanitizeAdvisor(raw.advisor, base.advisor, warnings);
+	const keywords = sanitizeKeywords(raw.keywords, base.keywords, warnings);
 
 	return {
 		config: {
@@ -498,11 +717,57 @@ export function sanitizeConfig(raw: unknown, base: PiExtendsConfig = defaultConf
 			theme: theme ?? base.theme,
 			currentModel,
 			roles,
+			routes,
 			providers,
 			subagents,
 			goal,
+			advisor,
+			keywords,
 		},
 		warnings,
+	};
+}
+
+/** 解析路由的结果：最终使用的模型、thinking，以及实际命中的路由名。 */
+export interface ResolvedRoute {
+	route: RouteName | null;
+	model: string;
+	thinking: ThinkingLevel;
+}
+
+/**
+ * 沿回退链解析路由。首选路由没配 model 时依次尝试 fallback（未显式配置则用
+ * DEFAULT_ROUTE_FALLBACKS），全部落空则回到 currentModel。
+ * thinking 取「第一个显式配置了 thinking 的路由」，与 model 可以来自不同路由：
+ * 例如 plan 只配了 thinking: high，模型就沿 slow → default 找，thinking 仍是 high。
+ */
+export function resolveRoute(config: PiExtendsConfig, route: RouteName): ResolvedRoute {
+	const seen = new Set<RouteName>();
+	const queue: RouteName[] = [route];
+	let model: string | undefined;
+	let thinking: ThinkingLevel | undefined;
+	let hit: RouteName | null = null;
+	while (queue.length > 0) {
+		const name = queue.shift() as RouteName;
+		if (seen.has(name)) {
+			continue;
+		}
+		seen.add(name);
+		const entry = config.routes[name];
+		if (entry?.thinking !== undefined && thinking === undefined) {
+			thinking = entry.thinking;
+		}
+		if (entry?.model !== undefined && model === undefined) {
+			model = entry.model;
+			hit = name;
+			break;
+		}
+		queue.push(...(entry?.fallback ?? DEFAULT_ROUTE_FALLBACKS[name]));
+	}
+	return {
+		route: hit,
+		model: model ?? config.currentModel.model,
+		thinking: thinking ?? config.currentModel.thinking,
 	};
 }
 

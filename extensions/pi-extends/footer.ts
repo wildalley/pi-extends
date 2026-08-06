@@ -119,6 +119,16 @@ class TpsTracker {
 	}
 }
 
+/** 供 cockpit 控制台读写 footer 开关的句柄（在 registerFooter 中装配）。 */
+export interface FooterController {
+	isEnabled(): boolean;
+	isTpsEnabled(): boolean;
+	setEnabled(ctx: ExtensionContext, enabled: boolean): void;
+	setTps(enabled: boolean): void;
+}
+
+export const footerController: Partial<FooterController> = {};
+
 export default function registerFooter(pi: ExtensionAPI): void {
 	let userEnabled = true;
 	let tpsEnabled = DEFAULT_SHOW_TPS;
@@ -309,6 +319,33 @@ export default function registerFooter(pi: ExtensionAPI): void {
 		});
 	}
 
+	function teardownFooter(ctx: ExtensionContext): void {
+		ctx.ui.setFooter(undefined);
+		if (timer) clearInterval(timer);
+		timer = undefined;
+		stopElapsedTicker();
+		unsubBranch?.();
+		unsubBranch = undefined;
+	}
+
+	function setFooterEnabled(ctx: ExtensionContext, enabled: boolean): void {
+		if (ctx.mode !== "tui") return;
+		userEnabled = enabled;
+		if (enabled) {
+			installFooter(ctx);
+		} else {
+			teardownFooter(ctx);
+		}
+	}
+
+	footerController.isEnabled = () => userEnabled;
+	footerController.isTpsEnabled = () => tpsEnabled;
+	footerController.setEnabled = setFooterEnabled;
+	footerController.setTps = (enabled: boolean) => {
+		tpsEnabled = enabled;
+		requestFooterRender?.();
+	};
+
 	pi.on("message_start", (event) => {
 		if (event.message.role === "user") {
 			taskStartedAt = event.message.timestamp;
@@ -373,19 +410,8 @@ export default function registerFooter(pi: ExtensionAPI): void {
 				ctx.ui.notify("用法: /footer [tps [on|off]]", "warning");
 				return;
 			}
-			userEnabled = !userEnabled;
-			if (userEnabled) {
-				installFooter(ctx);
-				ctx.ui.notify("Cometix footer on", "info");
-			} else {
-				ctx.ui.setFooter(undefined);
-				if (timer) clearInterval(timer);
-				timer = undefined;
-				stopElapsedTicker();
-				unsubBranch?.();
-				unsubBranch = undefined;
-				ctx.ui.notify("Cometix footer off（恢复默认）", "info");
-			}
+			setFooterEnabled(ctx, !userEnabled);
+			ctx.ui.notify(userEnabled ? "Cometix footer on" : "Cometix footer off（恢复默认）", "info");
 		},
 	});
 }

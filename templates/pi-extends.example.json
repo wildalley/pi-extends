@@ -28,6 +28,18 @@
       "tools": ["read", "grep", "find", "ls"]
     }
   },
+  "routes": {
+    "default": { "model": "anthropic/claude-sonnet-4-5", "thinking": "high" },
+    "smol": { "model": "google/gemini-2.5-flash", "thinking": "low" },
+    "slow": { "model": "openai/gpt-5.2", "thinking": "max" },
+    "plan": { "thinking": "high", "fallback": ["slow", "default"] },
+    "commit": { "thinking": "off", "fallback": ["smol", "default"] },
+    "vision": { "model": "google/gemini-2.5-flash", "thinking": "low" },
+    "designer": { "fallback": ["slow", "default"] },
+    "task": { "thinking": "medium" },
+    "advisor": { "thinking": "high", "fallback": ["slow", "default"] },
+    "tiny": { "model": "google/gemini-2.5-flash", "thinking": "off" }
+  },
   "providers": [],
   "subagents": {
     "maxParallelTasks": 8,
@@ -36,5 +48,13 @@
   "goal": {
     "defaultMode": "focused",
     "maxAutoTurns": 5
+  },
+  "advisor": {
+    "enabled": false,
+    "minSeverity": "concern",
+    "maxPerSession": 20
+  },
+  "keywords": {
+    "enabled": true
   }
 }

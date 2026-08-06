@@ -1,22 +1,27 @@
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
-	BUILTIN_TOOLS,
 	THINKING_LEVELS,
-	isValidThinkingLevel,
 	type PiExtendsConfig,
-	type RoleConfig,
 	type RoleName,
+	type ThinkingLevel,
 } from "./config.ts";
-import { updateConfig } from "./store.ts";
+import {
+	THINKING_HINTS,
+	pickModelId,
+	pickThinking,
+	pickToolSet,
+	readonlyToolSet,
+	shortModel,
+	thinkingTone,
+} from "./pickers.ts";
+import { getConfig, updateConfig } from "./store.ts";
+import { kv, runMenu, type MenuItem } from "./ui-kit.ts";
 
-export function describeRole(
-	config: PiExtendsConfig,
-	role: RoleName,
-): string {
+export function describeRole(config: PiExtendsConfig, role: RoleName): string {
 	const rc = config.roles[role];
 	const model = rc?.model ?? config.currentModel.model;
 	const thinking = rc?.thinking ?? config.currentModel.thinking;
-	const tools = rc?.tools?.join(", ") ?? "继承默认";
+	const tools = rc?.tools?.join(", ") ?? roleToolDefault(role).join(", ");
 	return `${role}: ${model} · thinking ${thinking} · 工具 [${tools}]`;
 }
 
@@ -31,183 +36,232 @@ export function roleToolDefault(role: RoleName): string[] {
 	}
 }
 
-export function resolveRoleModel(
-	config: PiExtendsConfig,
-	role: RoleName,
-): string {
+export function resolveRoleModel(config: PiExtendsConfig, role: RoleName): string {
 	return config.roles[role]?.model ?? config.currentModel.model;
 }
 
 export function resolveRoleThinking(
 	config: PiExtendsConfig,
 	role: RoleName,
-): typeof THINKING_LEVELS[number] {
+): (typeof THINKING_LEVELS)[number] {
 	return config.roles[role]?.thinking ?? config.currentModel.thinking;
 }
 
-export function resolveRoleTools(
-	config: PiExtendsConfig,
-	role: RoleName,
-): string[] {
+export function resolveRoleTools(config: PiExtendsConfig, role: RoleName): string[] {
 	return config.roles[role]?.tools ?? roleToolDefault(role);
 }
 
-function modelOptions(
+const WRITE_TOOLS = new Set(["bash", "edit", "write"]);
+
+async function mutateRole(
 	ctx: ExtensionCommandContext,
-	showAll: boolean,
-): string[] {
-	const models = ctx.modelRegistry.getAll();
-	const list = models
-		.filter((m) => showAll || ctx.modelRegistry.hasConfiguredAuth(m))
-		.map((m) => `${m.provider}/${m.id}`)
-		.sort();
-	return Array.from(new Set(list));
+	role: RoleName,
+	mutate: (rc: NonNullable<PiExtendsConfig["roles"][RoleName]>) => void,
+): Promise<void> {
+	await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (config) => {
+		const rc = config.roles[role] ?? {};
+		mutate(rc);
+		config.roles[role] = rc;
+	});
+}
+
+function roleStatus(theme: Theme, config: PiExtendsConfig, role: RoleName): string[] {
+	const rc = config.roles[role] ?? {};
+	const thinking = resolveRoleThinking(config, role);
+	const inherited = theme.fg("dim", "  继承");
+	const tools = resolveRoleTools(config, role)
+		.map((t) => theme.fg(WRITE_TOOLS.has(t) ? "warning" : "text", t))
+		.join(theme.fg("borderMuted", " · "));
+	return [
+		kv(
+			theme,
+			"◆",
+			"模型",
+			theme.fg("text", resolveRoleModel(config, role)) + (rc.model ? "" : inherited),
+		),
+		kv(
+			theme,
+			"◈",
+			"思考",
+			theme.fg(thinkingTone(thinking), thinking) +
+				(rc.thinking ? "" : inherited) +
+				theme.fg("borderMuted", "  ·  ") +
+				theme.fg("dim", THINKING_HINTS[thinking]),
+		),
+		kv(theme, "◇", "工具", tools + (rc.tools ? "" : inherited)),
+	];
+}
+
+function roleItems(config: PiExtendsConfig, role: RoleName): MenuItem[] {
+	const rc = config.roles[role] ?? {};
+	const thinking = resolveRoleThinking(config, role);
+	const tools = resolveRoleTools(config, role);
+	const items: MenuItem[] = [
+		{
+			id: "model",
+			group: "配置",
+			icon: "◆",
+			label: "模型",
+			hotkey: "1",
+			value: shortModel(resolveRoleModel(config, role)),
+			hint: rc.model ? "已定制" : "继承主模型",
+		},
+		{
+			id: "thinking",
+			group: "配置",
+			icon: "◈",
+			label: "thinking level",
+			hotkey: "2",
+			value: thinking,
+			tone: thinkingTone(thinking),
+			hint: rc.thinking ? "已定制" : "继承主模型",
+		},
+		{
+			id: "tools",
+			group: "配置",
+			icon: "◇",
+			label: "工具权限",
+			hotkey: "3",
+			value: `${tools.length} 个`,
+			hint: tools.join(" "),
+		},
+		{
+			id: "readonly",
+			group: "配置",
+			icon: "▸",
+			label: "限为只读工具",
+			hotkey: "4",
+			hint: readonlyToolSet().join(" "),
+		},
+	];
+	if (rc.model !== undefined) {
+		items.push({ id: "clear-model", group: "重置", icon: "×", label: "清除模型定制", hotkey: "5", tone: "muted" });
+	}
+	if (rc.thinking !== undefined) {
+		items.push({ id: "clear-thinking", group: "重置", icon: "×", label: "清除 thinking 定制", hotkey: "6", tone: "muted" });
+	}
+	if (rc.tools !== undefined) {
+		items.push({ id: "clear-tools", group: "重置", icon: "×", label: "清除工具定制", hotkey: "7", tone: "muted" });
+	}
+	items.push({ id: "reset", group: "重置", icon: "○", label: "整个角色恢复默认", hotkey: "0", tone: "muted" });
+	return items;
 }
 
 export async function editRoleWizard(
 	ctx: ExtensionCommandContext,
 	role: RoleName,
 ): Promise<void> {
-	const config = await getConfigForEdit(ctx);
-	const current = describeRole(config, role);
-	const action = await ctx.ui.select(`角色 ${role} 配置\n当前：${current}`, [
-		"设置模型",
-		"设置 thinking level",
-		"设置工具权限",
-		"恢复默认",
-	]);
-	if (action === undefined) {
+	if (ctx.mode !== "tui") {
+		ctx.ui.notify(describeRole(getConfig(ctx.cwd, ctx.isProjectTrusted()), role), "info");
 		return;
 	}
+	while (true) {
+		const config = getConfig(ctx.cwd, ctx.isProjectTrusted());
+		const rc = config.roles[role] ?? {};
+		const customized =
+			rc.model !== undefined || rc.thinking !== undefined || rc.tools !== undefined;
+		const picked = await runMenu(ctx, {
+			title: `角色 ${role}`,
+			titleRight: customized ? "已定制" : "全部继承默认",
+			status: (theme) => roleStatus(theme, config, role),
+			items: roleItems(config, role),
+			reserved: 16,
+		});
+		if (picked === undefined) {
+			return;
+		}
+		await applyRoleAction(ctx, role, picked, config);
+	}
+}
 
-	if (action === "设置模型") {
-		await pickRoleModel(ctx, role);
+async function applyRoleAction(
+	ctx: ExtensionCommandContext,
+	role: RoleName,
+	action: string,
+	config: PiExtendsConfig,
+): Promise<void> {
+	if (action === "model") {
+		const id = await pickModelId(ctx, `${role} 的模型`, resolveRoleModel(config, role));
+		if (id !== undefined) {
+			await mutateRole(ctx, role, (rc) => {
+				rc.model = id;
+			});
+			ctx.ui.notify(`角色 ${role} 的模型已设为 ${id}。`, "info");
+		}
 		return;
 	}
-	if (action === "设置 thinking level") {
-		await pickRoleThinking(ctx, role);
+	if (action === "thinking") {
+		const picked = await pickThinking(ctx, `${role} 的 thinking`, resolveRoleThinking(config, role), {
+			inheritLabel: "继承主模型",
+		});
+		if (picked === undefined) {
+			return;
+		}
+		if (picked === "__inherit") {
+			await mutateRole(ctx, role, (rc) => {
+				delete rc.thinking;
+			});
+			ctx.ui.notify(`角色 ${role} 的 thinking 改为继承主模型。`, "info");
+			return;
+		}
+		const level: ThinkingLevel = picked;
+		await mutateRole(ctx, role, (rc) => {
+			rc.thinking = level;
+		});
+		ctx.ui.notify(`角色 ${role} 的 thinking 已设为 ${level}。`, "info");
 		return;
 	}
-	if (action === "设置工具权限") {
-		await pickRoleTools(ctx, role);
+	if (action === "tools") {
+		const tools = await pickToolSet(ctx, `${role} 的工具权限`, resolveRoleTools(config, role));
+		if (tools !== undefined) {
+			await mutateRole(ctx, role, (rc) => {
+				rc.tools = tools;
+			});
+			ctx.ui.notify(`角色 ${role} 的工具已保存：${tools.join(" ") || "无"}。`, "info");
+		}
 		return;
 	}
-	if (action === "恢复默认") {
+	await applyRoleReset(ctx, role, action);
+}
+
+async function applyRoleReset(
+	ctx: ExtensionCommandContext,
+	role: RoleName,
+	action: string,
+): Promise<void> {
+	if (action === "readonly") {
+		const tools = readonlyToolSet();
+		await mutateRole(ctx, role, (rc) => {
+			rc.tools = tools;
+		});
+		ctx.ui.notify(`角色 ${role} 的工具已限为只读：${tools.join(" ")}。`, "info");
+		return;
+	}
+	if (action === "clear-model") {
+		await mutateRole(ctx, role, (rc) => {
+			delete rc.model;
+		});
+		ctx.ui.notify(`角色 ${role} 的模型改为继承主模型。`, "info");
+		return;
+	}
+	if (action === "clear-thinking") {
+		await mutateRole(ctx, role, (rc) => {
+			delete rc.thinking;
+		});
+		ctx.ui.notify(`角色 ${role} 的 thinking 改为继承主模型。`, "info");
+		return;
+	}
+	if (action === "clear-tools") {
+		await mutateRole(ctx, role, (rc) => {
+			delete rc.tools;
+		});
+		ctx.ui.notify(`角色 ${role} 的工具改为默认。`, "info");
+		return;
+	}
+	if (action === "reset") {
 		await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (config) => {
 			delete config.roles[role];
 		});
 		ctx.ui.notify(`角色 ${role} 已恢复默认。`, "info");
-		return;
 	}
-}
-
-async function getConfigForEdit(ctx: ExtensionCommandContext): Promise<PiExtendsConfig> {
-	const { getConfig } = await import("./store.ts");
-	return getConfig(ctx.cwd, ctx.isProjectTrusted());
-}
-
-async function pickRoleModel(
-	ctx: ExtensionCommandContext,
-	role: RoleName,
-): Promise<void> {
-	let showAll = false;
-	while (true) {
-		const options = modelOptions(ctx, showAll);
-		const header = showAll ? "全部模型" : "已认证模型（显示全部模型 查看所有）";
-		const labels = [...options, showAll ? "仅显示已认证模型" : "显示全部模型", "取消"];
-		const picked = await ctx.ui.select(`选择 ${role} 的模型（${header}）`, labels, {
-			timeout: 60000,
-		});
-		if (picked === undefined || picked === "取消") {
-			return;
-		}
-		if (picked === "显示全部模型" || picked === "仅显示已认证模型") {
-			showAll = !showAll;
-			continue;
-		}
-		await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (config) => {
-			if (!config.roles[role]) {
-				config.roles[role] = {};
-			}
-			config.roles[role].model = picked;
-		});
-		ctx.ui.notify(`角色 ${role} 的模型已设为 ${picked}。`, "info");
-		return;
-	}
-}
-
-async function pickRoleThinking(
-	ctx: ExtensionCommandContext,
-	role: RoleName,
-): Promise<void> {
-	const picked = await ctx.ui.select(`选择 ${role} 的 thinking level`, [
-		...THINKING_LEVELS,
-		"取消",
-	]);
-	if (picked === undefined || picked === "取消" || !isValidThinkingLevel(picked)) {
-		return;
-	}
-	await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (config) => {
-		if (!config.roles[role]) {
-			config.roles[role] = {};
-		}
-		config.roles[role].thinking = picked;
-	});
-	ctx.ui.notify(`角色 ${role} 的 thinking 已设为 ${picked}。`, "info");
-}
-
-async function pickRoleTools(
-	ctx: ExtensionCommandContext,
-	role: RoleName,
-): Promise<void> {
-	const config = await getConfigForEdit(ctx);
-	const current = new Set(resolveRoleTools(config, role));
-	while (true) {
-		const labels = BUILTIN_TOOLS.map((t) =>
-			current.has(t) ? `✓ ${t}` : `  ${t}`,
-		);
-		const header = `角色 ${role} 工具权限（当前：${Array.from(current).join(", ") || "无"}）`;
-		const action = await ctx.ui.select(header, [
-			`完成并保存（${Array.from(current).join(", ")}）`,
-			...labels,
-			"仅保留只读工具",
-			"取消",
-		]);
-		if (action === undefined || action === "取消") {
-			return;
-		}
-		if (action === "仅保留只读工具") {
-			current.clear();
-			for (const t of ["read", "grep", "find", "ls"]) {
-				current.add(t);
-			}
-			await saveTools(ctx, role, current);
-			ctx.ui.notify(`角色 ${role} 工具已限为只读。`, "info");
-			return;
-		}
-		if (action.startsWith("完成并保存")) {
-			await saveTools(ctx, role, current);
-			ctx.ui.notify(`角色 ${role} 工具已保存。`, "info");
-			return;
-		}
-		const tool = action.trim().replace(/^✓\s*/, "");
-		if (current.has(tool)) {
-			current.delete(tool);
-		} else {
-			current.add(tool);
-		}
-	}
-}
-
-async function saveTools(
-	ctx: ExtensionCommandContext,
-	role: RoleName,
-	tools: Set<string>,
-): Promise<void> {
-	await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (config) => {
-		if (!config.roles[role]) {
-			config.roles[role] = {};
-		}
-		config.roles[role].tools = Array.from(tools);
-	});
 }

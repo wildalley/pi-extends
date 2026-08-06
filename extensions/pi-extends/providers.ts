@@ -10,6 +10,7 @@ import {
 } from "./config.ts";
 import { getAPI } from "./runtime.ts";
 import { getConfig, updateConfig } from "./store.ts";
+import { kv, runInfoPage } from "./ui-kit.ts";
 
 export interface ProviderStatusLine {
 	id: string;
@@ -42,16 +43,38 @@ export function collectProviderStatus(
 
 export async function providerStatusPage(ctx: ExtensionContext): Promise<void> {
 	const config = getConfig(ctx.cwd, ctx.isProjectTrusted());
-	const lines = collectProviderStatus(ctx, config);
-	if (lines.length === 0) {
+	const rows = collectProviderStatus(ctx, config);
+	if (rows.length === 0) {
 		ctx.ui.notify("没有已注册的厂商。请先登录或添加自定义厂商。", "info");
 		return;
 	}
-	const labels = lines.map((l) => {
-		const auth = l.authenticated ? "已认证" : "未认证";
-		return `${l.id}${l.custom ? " (自定义)" : ""} · ${auth} · ${l.modelCount} 模型`;
+	if (ctx.mode !== "tui") {
+		const labels = rows.map(
+			(l) =>
+				`${l.id}${l.custom ? " (自定义)" : ""} · ${l.authenticated ? "已认证" : "未认证"} · ${l.modelCount} 模型`,
+		);
+		await ctx.ui.select("厂商认证状态（Esc 返回）", labels, { timeout: 60000 });
+		return;
+	}
+	const theme = ctx.ui.theme;
+	const authed = rows.filter((r) => r.authenticated).length;
+	const lines = rows.map((r) =>
+		kv(
+			theme,
+			r.authenticated ? "◉" : "○",
+			r.id,
+			[
+				theme.fg(r.authenticated ? "success" : "muted", r.authenticated ? "已认证" : "未认证"),
+				theme.fg("text", `${r.modelCount} 个模型`),
+				theme.fg("dim", r.custom ? "自定义" : r.displayName),
+			].join(theme.fg("borderMuted", "  ·  ")),
+		),
+	);
+	await runInfoPage(ctx, {
+		title: "厂商认证状态",
+		titleRight: `${authed}/${rows.length} 已认证`,
+		lines,
 	});
-	await ctx.ui.select("厂商认证状态（Esc 返回）", labels, { timeout: 60000 });
 }
 
 function registerProviderWithPi(

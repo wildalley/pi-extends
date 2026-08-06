@@ -26,6 +26,38 @@
         "reviewer": { "$ref": "#/$defs/role" }
       }
     },
+    "routes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default": { "$ref": "#/$defs/route" },
+        "smol": { "$ref": "#/$defs/route" },
+        "slow": { "$ref": "#/$defs/route" },
+        "plan": { "$ref": "#/$defs/route" },
+        "commit": { "$ref": "#/$defs/route" },
+        "vision": { "$ref": "#/$defs/route" },
+        "designer": { "$ref": "#/$defs/route" },
+        "task": { "$ref": "#/$defs/route" },
+        "advisor": { "$ref": "#/$defs/route" },
+        "tiny": { "$ref": "#/$defs/route" }
+      }
+    },
+    "advisor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minSeverity": { "enum": ["aside", "concern", "blocker"] },
+        "maxPerSession": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "keywords": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
     "providers": {
       "type": "array",
       "items": { "$ref": "#/$defs/customProvider" }
@@ -63,6 +95,31 @@
           "items": { "enum": ["read", "grep", "find", "ls", "bash", "edit", "write"] }
         },
         "systemPrompt": { "type": "string" }
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": { "type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$" },
+        "thinking": { "$ref": "#/$defs/thinkingLevel" },
+        "fallback": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "default",
+              "smol",
+              "slow",
+              "plan",
+              "commit",
+              "vision",
+              "designer",
+              "task",
+              "advisor",
+              "tiny"
+            ]
+          }
+        }
       }
     },
     "customProvider": {
