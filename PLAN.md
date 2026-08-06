@@ -38,21 +38,36 @@
 主菜单提供以下入口：
 
 1. `Theme`：切换 Pi 内置主题和本包主题。
-2. `Current model`：切换当前会话主模型及 thinking level。
-3. `Role models`：分别设置角色使用的模型、thinking level 和工具权限。
-4. `Providers`：查看内置厂商认证状态，添加、修改或移除自定义厂商。
-5. `Subagents`：查看角色配置并发起单个、并行或串行任务。
-6. `Goal mode`：创建、暂停、恢复、完成或清除目标。
-7. `Plan mode`：进入只读规划、查看计划、批准执行或继续修改。
-8. `Config`：生成示例、校验当前配置、显示配置路径。
+2. `Footer`：开关 cometix 单行状态栏与 TPS。
+3. `Current model`：切换当前会话主模型及 thinking level。
+4. `Role models`：分别设置角色使用的模型、thinking level 和工具权限。
+5. `Routes`：按用途给模型分工（default/smol/slow/plan/commit/vision/designer/task/advisor/tiny），沿回退链落到主模型。
+6. `Providers`：查看内置厂商认证状态，添加、修改或移除自定义厂商。
+7. `Subagents`：查看角色配置并发起单个、并行或串行任务。
+8. `Goal mode`：创建、暂停、恢复、完成或清除目标。
+9. `Plan mode`：进入只读规划、查看计划、批准执行或继续修改。
+10. `Prompts`：把工作流提示词填入编辑器。
+11. `Advisor`：旁审开关、最低展示等级与本会话上限。
+12. `Keywords`：魔法关键词总开关。
+13. `Config`：生成示例、校验当前配置、显示配置路径。
 
 同时保留适合熟练用户的直接命令：
 
 - `/cockpit`
+- `/theme [名称]`
+- `/routes`
 - `/roles`
 - `/agents`
+- `/advisor [on|off]`
 - `/goal [start|status|pause|resume|complete|clear]`
 - `/plan [on|off|status|execute]`
+- `/config [status|generate|validate]`
+
+主界面以卡片式菜单呈现：顶部三行实时状态（模型 / 运行态 / 上下文占用），
+主体按「外观 · 模型 · 工作流 · 系统」分组，每项右侧显示当前值；支持数字/字母
+热键直达、`/` 模糊搜索与光标记忆，主题与模型选择器在移动光标时即时预览。
+所有行按显示宽度对齐（CJK/emoji 不撑破边框），窄于 56 列时边框退化，
+非 TUI 模式回退为纯文本输出。
 
 ## 4. 技术架构
 
@@ -77,11 +92,22 @@ pi-extends/
 │       ├── subagents.ts
 │       ├── goal-mode.ts
 │       ├── plan-mode.ts
-│       └── plan-utils.ts
+│       ├── plan-utils.ts
+│       ├── routes.ts
+│       ├── advisor.ts
+│       ├── advisor-parse.ts
+│       ├── keywords.ts
+│       ├── pickers.ts
+│       ├── ui-kit.ts
+│       ├── footer.ts
+│       ├── runtime.ts
+│       └── store.ts
 ├── themes/
 │   ├── pi-carbon.json
 │   ├── pi-paper.json
-│   └── pi-contrast.json
+│   ├── pi-contrast.json
+│   ├── pi-sakura.json
+│   └── pi-terminal.json
 ├── prompts/
 │   ├── scout-and-plan.md
 │   ├── implement.md
@@ -91,7 +117,13 @@ pi-extends/
 └── tests/
     ├── config.test.ts
     ├── goal-mode.test.ts
-    └── plan-utils.test.ts
+    ├── plan-utils.test.ts
+    ├── subagent-parse.test.ts
+    ├── advisor-parse.test.ts
+    ├── keywords.test.ts
+    ├── routes.test.ts
+    ├── ui-kit.test.ts
+    └── ui-kit-render.test.ts
 ```
 
 根 `package.json` 的 Pi manifest 与依赖约定：
@@ -104,13 +136,48 @@ pi-extends/
 模块职责：
 
 - `index.ts`：注册命令、工具、provider 和生命周期事件。
-- `cockpit.ts`：主控制台及各配置向导。
-- `config.ts`：读取、合并、校验和原子写入配置。
+- `cockpit.ts`：主控制台及各配置向导（含厂商、子代理、Goal、Plan、提示词、Advisor、关键词菜单）。
+- `config.ts`：读取、合并、校验和原子写入配置；路由解析与回退链。
 - `providers.ts`：内置厂商信息、自定义 provider 注册和模型发现。
 - `roles.ts`：角色默认值、模型映射和权限策略。
 - `subagents.ts`：启动隔离 Pi 子进程、并发控制、流式结果汇总和中止传播。
 - `goal-mode.ts`：目标状态机、会话持久化、提示注入和受限自动推进。
 - `plan-mode.ts`：只读工具集、计划提取、批准执行和步骤进度。
+- `routes.ts`：十条路由角色编辑向导；解析优先级 自身配置 → 回退链 → 主模型。
+- `advisor.ts`：每轮后旁审子进程调度、消息卡片注入与开关。
+- `advisor-parse.ts`：旁审输出的纯函数解析、过滤与渲染。
+- `keywords.ts`：魔法关键词检测（只在散文生效）与输入改写。
+- `pickers.ts`：主题 / 模型 / thinking 选择器，移动光标即时预览。
+- `ui-kit.ts`：卡片式菜单、状态行、宽度对齐、搜索与热键的通用组件。
+- `footer.ts`：cometix 单行状态栏与 TPS 追踪，导出控制句柄供 cockpit 读写。
+- `runtime.ts`：运行时 API 单例。
+- `store.ts`：配置读取与原子更新的单例。
+
+## 4.1 路由角色
+
+路由把「用途」映射到模型，配置是渐进式的（十条路由全空也能正常工作）：
+
+- 预设 `default / smol / slow / plan / commit / vision / designer / task / advisor / tiny` 十条路由，各带说明与默认回退链。
+- 解析顺序：路由自身配置 → 沿回退链找第一个显式模型 → 主模型；thinking 取回退链上第一个显式值。
+- 例如 `plan` 未配模型时回退 `slow → default → 主模型`；`commit` 回退 `smol → default`。
+- 自定义回退链优先于默认链；存在环时安全终止。
+
+## 4.2 Advisor 旁审
+
+每轮结束后让第二个模型在独立上下文里只读复查刚才的一来一回：
+
+- 走子进程（与 subagent 同一套 `pi` 调用），带 `-ne` 且设环境变量兜底，避免旁审递归拉起旁审。
+- 只给只读工具，`sendMessage({ triggerTurn: false })`，永远不会替用户发起新一轮。
+- 子进程输出 `aside|concern|blocker :: 标题 :: 说明`，解析为无边框卡片贴回转录区，低于阈值的丢弃。
+- 配置含开关、最低展示等级与本会话最大条数，通过 `/advisor` 或 cockpit 控制。
+
+## 4.3 魔法关键词
+
+输入散文里出现 `ultrathink / orchestrate / workflowz` 时改写本轮行为：
+
+- 只在「散文」生效：代码块、行内代码、XML/HTML 标签、标识符与路径中的同名词一律不触发。
+- `ultrathink` 把当轮 thinking 提到 max，本轮结束后自动恢复原值。
+- `orchestrate` 改写为派并行子代理分工；`workflowz` 改写为 scout → planner → worker → reviewer 全流水线。
 
 ## 5. 配置格式
 
@@ -155,6 +222,26 @@ pi-extends/
   "goal": {
     "defaultMode": "focused",
     "maxAutoTurns": 5
+  },
+  "routes": {
+    "default": { "model": "anthropic/claude-sonnet-4-5", "thinking": "high" },
+    "smol": { "model": "google/gemini-2.5-flash", "thinking": "low" },
+    "slow": { "model": "openai/gpt-5.2", "thinking": "max" },
+    "plan": { "thinking": "high", "fallback": ["slow", "default"] },
+    "commit": { "thinking": "off", "fallback": ["smol", "default"] },
+    "vision": { "model": "google/gemini-2.5-flash", "thinking": "low" },
+    "designer": { "fallback": ["slow", "default"] },
+    "task": { "thinking": "medium" },
+    "advisor": { "thinking": "high", "fallback": ["slow", "default"] },
+    "tiny": { "model": "google/gemini-2.5-flash", "thinking": "off" }
+  },
+  "advisor": {
+    "enabled": false,
+    "minSeverity": "concern",
+    "maxPerSession": 20
+  },
+  "keywords": {
+    "enabled": true
   }
 }
 ```
@@ -302,13 +389,15 @@ Plan 与 Goal 同时使用时：
 
 ## 10. 主题
 
-包内提供三个完整主题，并保留 Pi 的 `dark`、`light` 主题：
+包内提供五个完整主题，并保留 Pi 的 `dark`、`light` 主题：
 
 - `pi-carbon`：中性深色工作台，使用青色、绿色、琥珀色和红色区分语义。
 - `pi-paper`：适合浅色终端的高可读主题。
 - `pi-contrast`：适合低质量显示器和远程终端的高对比主题。
+- `pi-sakura`：樱色马卡龙配色。
+- `pi-terminal`：荧光绿 CRT 配色。
 
-切换时调用 `ctx.ui.setTheme()` 立即生效，并把选择写入配置。每个主题包含 Pi 要求的全部颜色 token，并通过启动加载测试校验。
+切换时调用 `ctx.ui.setTheme()` 立即生效，并把选择写入配置。每个主题包含 Pi 要求的全部颜色 token，并通过 WCAG 对比度校验。
 
 ## 11. 安全与信任边界
 
@@ -316,8 +405,9 @@ Plan 与 Goal 同时使用时：
 - 自定义 provider 的 Base URL 在保存前展示确认，避免误把请求发送到未知服务。
 - API Key 只通过环境变量或 Pi 自身认证机制提供。
 - 子代理继承明确的 cwd、角色工具白名单和中止信号。
+- Advisor 旁审子进程带 `-ne` 并设环境变量兜底，避免递归拉起旁审；只给只读工具且不触发新一轮。
 - shell 调用使用参数数组，不拼接用户输入为 shell 命令。
-- 角色名、provider ID 和模型 ID进行格式校验。
+- 角色名、provider ID、路由名和模型 ID 进行格式校验。
 - 配置解析失败时继续使用上一个有效配置或默认值。
 - 自动模式有硬性轮次上限，不提供无限循环选项。
 
@@ -334,7 +424,10 @@ Plan 与 Goal 同时使用时：
 
 ## 13. 实施阶段
 
-### 阶段一：包与配置基础
+> 状态：首版五阶段均已实现并通过测试（`npm run typecheck`、`npm test`、真实 Pi TUI 冒烟）。
+> 阶段四之后追加了路由角色、Advisor 旁审、魔法关键词与卡片式控制台（见 4.1–4.3）。
+
+### 阶段一：包与配置基础 ✅
 
 - 创建 `package.json`（含 `pi` manifest、`peerDependencies`）、TypeScript 配置。
 - 定义配置类型、默认值、合并、校验和原子保存。
@@ -342,16 +435,16 @@ Plan 与 Goal 同时使用时：
 
 完成标准：无配置时可加载；损坏配置只产生可理解的警告。
 
-### 阶段二：Cockpit、主题和模型
+### 阶段二：Cockpit、主题和模型 ✅
 
-- 实现 `/cockpit` 主界面。
+- 实现 `/cockpit` 主界面（卡片式菜单，含实时状态、热键、搜索与即时预览）。
 - 添加主题资源与即时切换。
 - 实现当前模型、thinking level 和角色模型配置。
 - 实现内置厂商状态页和自定义 provider 向导。
 
 完成标准：配置可在 TUI 中完成并跨 Pi 会话恢复。
 
-### 阶段三：子代理
+### 阶段三：子代理 ✅
 
 - 实现角色提示和工具权限。
 - 实现 single、parallel、chain 三种执行方式。
@@ -359,7 +452,7 @@ Plan 与 Goal 同时使用时：
 
 完成标准：不同角色可使用不同模型完成同一工作流，失败任务不影响其他并行任务的结果收集。
 
-### 阶段四：Goal 与 Plan
+### 阶段四：Goal 与 Plan ✅
 
 - 实现 Goal 状态机、持久化、状态组件和受限续跑。
 - 移植并调整官方 Plan 模式。
@@ -367,7 +460,15 @@ Plan 与 Goal 同时使用时：
 
 完成标准：Plan 期间无法通过内置工具或子代理写入；Goal 达到轮次上限后必定停止。
 
-### 阶段五：文档与发布验证
+### 阶段四+：路由、旁审与关键词 ✅
+
+- 实现十条路由角色编辑页与回退链解析。
+- 实现 Advisor 旁审（独立上下文子进程、只读工具、卡片渲染）。
+- 实现魔法关键词输入改写与当轮 thinking 恢复。
+
+完成标准：路由全空可正常运行；旁审不递归、不触发新一轮；关键词只在散文生效。
+
+### 阶段五：文档与发布验证 ✅
 
 - 完成中文 README、安装、配置和使用示例。
 - 添加第三方声明和许可证。
@@ -377,23 +478,26 @@ Plan 与 Goal 同时使用时：
 
 ## 14. 测试计划
 
-### 单元测试
+### 单元测试（已落地 63 条，`npm test`）
 
-- 默认配置和深度合并。
-- 无效 JSON、错误字段和旧版本配置。
-- provider/model ID 与环境变量名校验。
-- Plan 只读命令 allowlist/denylist。
-- 计划步骤与 `[DONE:n]` 提取。
-- Goal 状态转换和最大轮次边界。
-- 子代理 JSONL 事件解析与输出截断。
+- 默认配置和深度合并（`config.test.ts`）。
+- 无效 JSON、错误字段和旧版本配置（`config.test.ts`）。
+- provider/model ID 与环境变量名校验（`config.test.ts`）。
+- 路由回退链解析与环检测（`routes.test.ts`）。
+- Advisor 输出解析、过滤与排序（`advisor-parse.test.ts`）。
+- 关键词散文检测与掩码（`keywords.test.ts`）。
+- 卡片布局与宽度对齐（`ui-kit.test.ts`、`ui-kit-render.test.ts`）。
+- Plan 只读命令 allowlist/denylist、计划步骤与 `[DONE:n]` 提取（`plan-utils.test.ts`）。
+- Goal 状态转换和最大轮次边界（`goal-mode.test.ts`）。
+- 子代理 JSONL 事件解析与输出截断（`subagent-parse.test.ts`）。
 
-### 集成测试
+### 集成测试（已通过真实 Pi TUI 冒烟）
 
-- 通过 `pi --list-models` 验证扩展与 provider 可加载。
+- `pi --list-models` / 启动加载验证扩展、提示词与主题被发现。
+- 真实 PTY 中打开 `/cockpit`、`/routes`、`/advisor`、`/keywords` 并完成切换。
+- 主题切换立即生效并在重启后恢复；配置原子写回 `.pi/pi-extends.json`。
+- Goal/Plan/footer/agents/config 命令路径均无异常。
 - 在临时 `PI_CODING_AGENT_DIR` 中验证不污染用户配置。
-- 启动真实 Pi PTY，打开 `/cockpit` 并完成主题切换。
-- 模拟子代理成功、错误和中止。
-- 验证 session resume 后恢复 Goal 和 Plan 状态。
 
 ### 打包测试
 
@@ -407,10 +511,13 @@ Plan 与 Goal 同时使用时：
 - `/cockpit` 能在 Pi TUI 中打开并返回，不破坏输入编辑器状态。
 - 主题切换立即生效，重启后仍应用所选主题。
 - 四个默认角色可以绑定不同 provider/model。
+- 十条路由可按用途分工，未配置的沿回退链落到主模型。
 - 至少一个自定义 OpenAI-compatible provider 可通过环境变量认证并出现在模型列表。
 - `subagent` 支持 single、parallel、chain，并可中止。
 - Goal focused/autopilot 均可用，autopilot 永远不会超过配置轮次。
 - Plan 模式能阻止写操作，并在批准后追踪执行步骤。
+- Advisor 旁审可开关，子进程隔离，不触发新一轮。
+- 魔法关键词在散文里生效，代码块/标识符/路径中不误触。
 - 所有配置均可手工审阅，不含明文密钥。
 - 测试、类型检查和 Pi 加载冒烟测试通过。
 
