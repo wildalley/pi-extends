@@ -7,33 +7,12 @@
 import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { icon } from "./icons.ts";
+import { spark } from "./ui-kit.ts";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
-const ICON_MODE: "nerd" | "emoji" = "emoji";
 const DEFAULT_SHOW_TPS = true;
 const GIT_TTL = 3000;
-
-const cp = (n: number) => String.fromCodePoint(n);
-const ICONS = {
-	nerd: {
-		model: "\ue22c",
-		dir: "\ue285",
-		git: cp(0xf02a2),
-		ctx: "\uf49b",
-		usage: cp(0xf0a9e),
-		cost: cp(0xf01c1),
-		duration: cp(0xf0109),
-	},
-	emoji: {
-		model: "🧠",
-		dir: "📁",
-		git: "🌿",
-		ctx: "⚡",
-		usage: "📊",
-		cost: "💰",
-		duration: "⏱️",
-	},
-}[ICON_MODE];
 
 const RESET = "\x1b[0m";
 const SEG = `\x1b[2m | ${RESET}`;
@@ -153,8 +132,20 @@ class UsageTotals {
 	}
 }
 
+/**
+ * 火花线保留多少轮。
+ *
+ * 8 是「够看出趋势」和「footer 只有一行」的折中：footer 要跟模型名、目录、Git、
+ * 上下文、用量、费用挤在同一行，窄终端上先被截掉的就是最右边的时长段。
+ * 8 列约等于两个汉字宽，看得出升降，又不至于把别的段挤掉。
+ */
+const TPS_HISTORY = 8;
+
 class TpsTracker {
 	private firstOutputAt: number | undefined;
+
+	/** 最近若干轮的 TPS，新的在后。只在 finish() 拿到有效值时才追加。 */
+	readonly history: number[] = [];
 
 	start(): void {
 		this.firstOutputAt = undefined;
@@ -171,7 +162,12 @@ class TpsTracker {
 		this.firstOutputAt = undefined;
 		const elapsedMs = firstOutputAt === undefined ? 0 : now - firstOutputAt;
 		if (!Number.isFinite(outputTokens) || outputTokens <= 0 || elapsedMs <= 0) return undefined;
-		return outputTokens / (elapsedMs / 1000);
+		const tps = outputTokens / (elapsedMs / 1000);
+		this.history.push(tps);
+		if (this.history.length > TPS_HISTORY) {
+			this.history.shift();
+		}
+		return tps;
 	}
 }
 
@@ -275,25 +271,25 @@ export default function registerFooter(pi: ExtensionAPI): void {
 					let modelSeg: string;
 					if (showLvl) {
 						const lvlToken = `thinking${lvl.charAt(0).toUpperCase()}${lvl.slice(1)}` as ThemeColor;
-						modelSeg = bold(fg("accent", `${ICONS.model}  ${modelId}`)) + ` ${fg("dim", "•")} ${fg(lvlToken, lvl)}`;
+						modelSeg = bold(fg("accent", `${icon("model")} ${modelId}`)) + ` ${fg("dim", "•")} ${fg(lvlToken, lvl)}`;
 					} else {
-						modelSeg = bold(fg("accent", `${ICONS.model}  ${modelId}`));
+						modelSeg = bold(fg("accent", `${icon("model")} ${modelId}`));
 					}
 
 					const dirText = fmtCwd(ctx.sessionManager.getCwd(), home);
-					const dirSeg = bold(fg("warning", `${ICONS.dir} `)) + fg("success", dirText);
+					const dirSeg = bold(fg("warning", `${icon("dir")} `)) + fg("success", dirText);
 
 					const branch = footerData.getGitBranch();
 					let gitSeg = "";
 					if (branch) {
 						const g = gitCache.data;
-						let st = " ✓";
-						if (g.conflicts) st = " ⚠";
-						else if (g.dirty) st = " ●";
+						let st = ` ${icon("check")}`;
+						if (g.conflicts) st = ` ${icon("warn")}`;
+						else if (g.dirty) st = ` ${icon("dirty")}`;
 						let remote = "";
 						if (g.ahead > 0) remote += ` ↑${g.ahead}`;
 						if (g.behind > 0) remote += ` ↓${g.behind}`;
-						gitSeg = bold(fg("mdLink", `${ICONS.git} ${branch}${st}${remote}`));
+						gitSeg = bold(fg("mdLink", `${icon("git")} ${branch}${st}${remote}`));
 					}
 
 					const cu = ctx.getContextUsage();
@@ -303,26 +299,33 @@ export default function registerFooter(pi: ExtensionAPI): void {
 					const winStr = cu?.contextWindow ? fmtTok(cu.contextWindow) : "?";
 					const ctxColor: ThemeColor =
 						pct == null ? "thinkingHigh" : pct > 90 ? "error" : pct > 70 ? "warning" : "thinkingHigh";
-					const ctxSeg = bold(fg(ctxColor, `${ICONS.ctx} ${pctStr} ${tokStr}/${winStr}`));
+					const ctxSeg = bold(fg(ctxColor, `${icon("ctx")} ${pctStr} ${tokStr}/${winStr}`));
 
-					let tokText = `${ICONS.usage} ↑${fmtTok(totals.input)} ↓${fmtTok(totals.output)}`;
+					let tokText = `${icon("usage")} ↑${fmtTok(totals.input)} ↓${fmtTok(totals.output)}`;
 					if ((totals.cacheRead > 0 || totals.cacheWrite > 0) && totals.lastCacheHit != null) {
 						tokText += ` CH${totals.lastCacheHit.toFixed(1)}%`;
 					}
 					const tokSeg = bold(fg("accent", tokText));
 					const costSeg =
-						totals.cost > 0 ? fg("warning", `${ICONS.cost} ${totals.cost.toFixed(3)}`) : "";
+						totals.cost > 0 ? fg("warning", `${icon("cost")} ${totals.cost.toFixed(3)}`) : "";
 
 					const displayedTaskDurationMs =
 						taskStartedAt != null ? Math.max(0, now - taskStartedAt) : latestTaskDurationMs;
 					let durationText =
 						displayedTaskDurationMs != null
-							? `${ICONS.duration} ${formatDuration(displayedTaskDurationMs)}`
+							? `${icon("duration")} ${formatDuration(displayedTaskDurationMs)}`
 							: "";
 					if (tpsEnabled && latestTps != null) {
 						durationText += `${durationText ? " · " : ""}${latestTps.toFixed(1)} tok/s`;
 					}
-					const durationSeg = durationText ? fg("thinkingHigh", durationText) : "";
+					let durationSeg = durationText ? fg("thinkingHigh", durationText) : "";
+					// 火花线跟在数字后面：数字是「这一轮多快」，火花线是「比前几轮快还是慢」。
+					// 单看一个数字看不出这个，而生成速度突然掉一半通常意味着换了模型或换了
+					// thinking 档位 —— 这类变化值得当场看见，不该等到翻账单才发现。
+					// 少于两轮不画：一根柱子表达不了趋势。
+					if (tpsEnabled && tpsTracker.history.length >= 2) {
+						durationSeg += ` ${spark(theme, tpsTracker.history, "dim")}`;
+					}
 
 					const segs = [modelSeg, dirSeg];
 					if (gitSeg) segs.push(gitSeg);

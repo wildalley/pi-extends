@@ -17,6 +17,7 @@ import {
 	type RouteName,
 	type ThinkingLevel,
 } from "./config.ts";
+import { icon } from "./icons.ts";
 import { THINKING_HINTS, pickModelId, pickThinking, shortModel, thinkingTone } from "./pickers.ts";
 import { editConfig } from "./config-ui.ts";
 import { getConfig } from "./store.ts";
@@ -48,7 +49,7 @@ function routeValue(config: PiExtendsConfig, route: RouteName): string {
 		return shortModel(rc.model);
 	}
 	const resolved = resolveRoute(config, route);
-	return resolved.route === null ? "主模型" : `↩ ${resolved.route}`;
+	return resolved.route === null ? "主模型" : `${icon("fallback")} ${resolved.route}`;
 }
 
 function routeHint(config: PiExtendsConfig, route: RouteName): string {

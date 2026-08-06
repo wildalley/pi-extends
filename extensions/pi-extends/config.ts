@@ -1,8 +1,20 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { DEFAULT_ICON_SET, ICON_SETS, resolveIconSet, type IconSet } from "./icons.ts";
+import {
+	BORDER_STYLES,
+	DEFAULT_BORDER,
+	resolveBorderStyle,
+	type BorderStyle,
+} from "./ui-kit.ts";
 
 export const CONFIG_VERSION = 1;
+
+// 图标集的取值与字形表都归 icons.ts 管，边框样式归 ui-kit.ts 管，
+// 这里只做配置字段的校验与透传。
+export { ICON_SETS, type IconSet };
+export { BORDER_STYLES, type BorderStyle };
 
 export const THINKING_LEVELS = [
 	"off",
@@ -182,6 +194,10 @@ export interface PiExtendsConfig {
 	$schema?: string;
 	version: number;
 	theme: string;
+	/** 界面图标字形集，见 icons.ts。默认 lucide，需装 Lucide 字体。 */
+	icons: IconSet;
+	/** 卡片边框样式，见 ui-kit.ts。默认 round。 */
+	border: BorderStyle;
 	currentModel: CurrentModelConfig;
 	roles: Partial<Record<RoleName, RoleConfig>>;
 	routes: Partial<Record<RouteName, RouteConfig>>;
@@ -294,6 +310,8 @@ export function defaultConfig(): PiExtendsConfig {
 		$schema: "./schemas/pi-extends.schema.json",
 		version: CONFIG_VERSION,
 		theme: "pi-carbon",
+		icons: DEFAULT_ICON_SET,
+		border: DEFAULT_BORDER,
 		currentModel: {
 			model: "anthropic/claude-sonnet-4-5",
 			thinking: "high",
@@ -369,6 +387,8 @@ export function emptyBase(): PiExtendsConfig {
 	return {
 		version: CONFIG_VERSION,
 		theme: "pi-carbon",
+		icons: DEFAULT_ICON_SET,
+		border: DEFAULT_BORDER,
 		currentModel: {
 			model: "anthropic/claude-sonnet-4-5",
 			thinking: "high",
@@ -739,6 +759,34 @@ export function sanitizeConfig(
 	}
 
 	const theme = asOptionalString(raw.theme, warnings, "theme");
+
+	const rawIcons = asOptionalString(raw.icons, warnings, "icons");
+	let icons = base.icons;
+	if (rawIcons !== undefined) {
+		// 用 resolveIconSet 而不是严格相等：这个文件是手写的，"Lucide" 和 " nerd "
+		// 是常见笔误，认出来归一化比丢掉再警告有用。归一化后的值会随保存写回文件，
+		// 顺手把大小写也纠正了。真正不认识的值才警告。
+		const parsed = resolveIconSet(rawIcons);
+		if (parsed !== undefined) {
+			icons = parsed;
+		} else {
+			warnings.push(`icons: 未知图标集 "${rawIcons}"，忽略（可选 ${ICON_SETS.join(" / ")}）`);
+		}
+	}
+
+	// 边框同样宽松解析：理由见上面 icons 那段。
+	const rawBorder = asOptionalString(raw.border, warnings, "border");
+	let border = base.border;
+	if (rawBorder !== undefined) {
+		const parsed = resolveBorderStyle(rawBorder);
+		if (parsed !== undefined) {
+			border = parsed;
+		} else {
+			warnings.push(
+				`border: 未知边框样式 "${rawBorder}"，忽略（可选 ${BORDER_STYLES.join(" / ")}）`,
+			);
+		}
+	}
 	let currentModel = base.currentModel;
 	if (raw.currentModel !== undefined) {
 		if (isPlainRecord(raw.currentModel)) {
@@ -834,6 +882,8 @@ export function sanitizeConfig(
 			$schema: asOptionalString(raw.$schema, warnings, "$schema") ?? base.$schema,
 			version: CONFIG_VERSION,
 			theme: theme ?? base.theme,
+			icons,
+			border,
 			currentModel,
 			roles,
 			routes,

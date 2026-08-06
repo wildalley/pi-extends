@@ -2,6 +2,8 @@
   "$schema": "./schemas/pi-extends.schema.json",
   "version": 1,
   "theme": "pi-carbon",
+  "icons": "lucide",
+  "border": "round",
   "currentModel": {
     "model": "anthropic/claude-sonnet-4-5",
     "thinking": "high"

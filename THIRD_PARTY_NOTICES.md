@@ -32,7 +32,7 @@
 - **来源**: https://github.com/Xichun123/pi-cometix-footer（MIT，Xichun123）
 - **许可证**: MIT
 - **改动范围**:
-  - `footer.ts`：二开单行 cometix 风格 footer。改为颜色跟随当前主题（`theme.fg`）而非硬编码 16 色 SGR；图标默认使用 emoji 模式；命令更名为 `/footer`（支持 `tps` 子命令）。
+  - `footer.ts`：二开单行 cometix 风格 footer。改为颜色跟随当前主题（`theme.fg`）而非硬编码 16 色 SGR；图标改走本包统一的 `icon()`（Lucide/Nerd/Unicode/ASCII 四套，原为写死的 emoji 模式）；命令更名为 `/footer`（支持 `tps` 子命令）。
   - `duration.ts`、`tps.ts` 逻辑内联进 `footer.ts`。
   - 视觉风格源自 CCometixLine（MIT, Haleclipse），见上游 README。
 
@@ -42,10 +42,32 @@
 - **许可证**: MIT
 - **改动范围**: 未直接复制代码；参考其「特色主题/header/footer」的设计思路，新增 `pi-sakura`（马卡龙樱色）与 `pi-terminal`（荧光绿 CRT）两个原创主题。
 
+## 6. 图标字形与码位表
+
+本包**不分发**任何字体文件，也未复制上游代码，只引用两份公开码位表里的**码位值**。
+
+- **Lucide** —— https://github.com/lucide-icons/lucide
+  - **许可证**: ISC（Copyright (c) Lucide Icons and Contributors）
+  - **用途**: `lucide` 字形集的私有区码位，取自 `lucide-static` 的 `font/info.json`。
+    `lucide.ttf` 由使用者自行安装到系统字体，见 README「图标」一节。
+- **Nerd Fonts** —— https://github.com/ryanoasis/nerd-fonts
+  - **许可证**: 该仓库为多许可证项目 —— 字体与带 OFL 声明的目录为 SIL Open Font
+    License 1.1，仓库原创源码为 MIT，另有其他许可证，详见上游 `license-audit.md`。
+    本包只读取仓库根目录 `glyphnames.json` 中的 `code` 字段。
+  - **用途**: `nerd` 字形集的码位核对。
+- **改动范围**:
+  - `icons.ts`：图标名到四套字形的映射表；`unicode` 与 `ascii` 两套为本项目原创，
+    不涉及上游资产。
+  - `tools/fetch-icon-tables.mjs`：从上游拉取码位表到本地缓存。
+  - `tools/verify-icons.mjs`：逐条比对本地图标表与上游码位，防止码位写错 ——
+    私有区码位写错时，本机缺字形的表现和「字体没装」一模一样，肉眼分不出来。
+
 ## 依赖
 
 - 运行时仅依赖 Pi 提供的 peer packages：`@earendil-works/pi-ai`、
   `@earendil-works/pi-agent-core`、`@earendil-works/pi-coding-agent`、
   `@earendil-works/pi-tui`、`typebox`。
+- `lucide-static` 不是本包依赖，运行时不 import；只在按 README 装字体时
+  用一次 (`npm i -D lucide-static`)，或由 `fetch-icon-tables.mjs` 走网络取表。
 
 本包采用 MIT 许可证，详见根目录 LICENSE 信息。

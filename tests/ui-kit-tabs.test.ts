@@ -177,7 +177,7 @@ test("切栏不改变列宽：按全部项算一次，不按当前栏重算", ()
 		const row = menu
 			.render(80)
 			.map((l) => stripAnsi(l))
-			.find((l) => /^[›\s]\s*\d\s+\S/.test(l));
+			.find((l) => /^[▌\s]\s*\d\s+\S/.test(l));
 		assert.ok(row, "每一栏都应有带快捷键的项");
 		// 中日韩字符占两列，所以量的是显示宽度而不是字符数。
 		edges.push(visibleWidth(row.trimEnd()));

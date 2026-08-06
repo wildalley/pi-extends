@@ -7,6 +7,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { ADVISOR_SEVERITIES, type AdvisorSeverity } from "./config.ts";
 import { wrapText } from "./ui-kit.ts";
+import { icon, type IconName } from "./icons.ts";
 
 export interface AdvisorNote {
 	severity: AdvisorSeverity;
@@ -20,11 +21,20 @@ const SEVERITY_RANK: Record<AdvisorSeverity, number> = {
 	blocker: 2,
 };
 
-export const SEVERITY_ICONS: Record<AdvisorSeverity, string> = {
-	aside: "◇",
-	concern: "▲",
-	blocker: "■",
+/**
+ * 存图标名而不是字形 —— 模块级常量只求值一次，写死字形的话切换图标集后
+ * 旁审卡片仍会用旧字形。取用处走 severityIcon() 在渲染时解析。
+ */
+export const SEVERITY_ICONS: Record<AdvisorSeverity, IconName> = {
+	aside: "scout",
+	concern: "warn",
+	blocker: "stop",
 };
+
+/** 取某个严重度当前该用的字形。 */
+export function severityIcon(severity: AdvisorSeverity): string {
+	return icon(SEVERITY_ICONS[severity]);
+}
 
 export const SEVERITY_LABELS: Record<AdvisorSeverity, string> = {
 	aside: "旁注",
@@ -93,7 +103,7 @@ export function renderNotes(theme: Theme, notes: AdvisorNote[], width: number): 
 	for (const note of notes) {
 		const tone = severityTone(note.severity);
 		out.push(
-			`  ${theme.fg(tone, SEVERITY_ICONS[note.severity])} ${theme.fg(tone, SEVERITY_LABELS[note.severity])}  ${theme.bold(theme.fg("text", note.title))}`,
+			`  ${theme.fg(tone, severityIcon(note.severity))} ${theme.fg(tone, SEVERITY_LABELS[note.severity])}  ${theme.bold(theme.fg("text", note.title))}`,
 		);
 		for (const line of wrapText(note.body, inner)) {
 			if (line !== "") {

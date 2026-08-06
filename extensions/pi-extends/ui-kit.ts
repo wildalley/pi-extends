@@ -1,22 +1,114 @@
 /**
  * pi-extends 共享 TUI 套件。
  *
- * 所有交互界面都通过 ctx.ui.custom() 接管键盘焦点，渲染成一张「无边框卡片」：
- *   ● 标题 ····· 右侧小字 → 状态区 → 主体（菜单 / 文本）→ 单行按键提示
- * 不画方框，改用缩进 + 空行 + 主题色分层来分区，贴在对话流里像一条普通消息，
- * 而不是一个突然弹出的窗口。颜色一律取自当前主题的语义 token（accent /
- * borderMuted / muted / dim …），不硬编码 ANSI，因此切换主题即刻跟随变色。
+ * 所有交互界面都通过 ctx.ui.custom() 接管键盘焦点，渲染成一张卡片：
+ *   ╭─ 标题 ─── 右侧小字 ─╮ → 状态区 → 主体（菜单 / 文本）→ 单行按键提示 → ╰────╯
+ * 边框样式由配置的 `border` 决定（round / square / none），none 时退回纯缩进排版 ——
+ * 靠缩进 + 空行 + 主题色分层分区，贴在对话流里像一条普通消息而不是弹窗。
+ * 颜色一律取自当前主题的语义 token（accent / dim / muted …），不硬编码 ANSI，
+ * 因此切换主题即刻跟随变色。
  */
 
 import type { ExtensionCommandContext, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { Component, KeybindingsManager, TUI } from "@earendil-works/pi-tui";
 import { fuzzyFilter, Input, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { icon } from "./icons.ts";
 import { MOUSE_OFF, MOUSE_ON, parseMouse } from "./mouse.ts";
 
 /** 卡片最大宽度：终端更宽时留白，避免菜单被拉成一条长线。 */
 const MAX_CARD_WIDTH = 96;
 /** 卡片左侧留白，正文都缩进这么多列。 */
 const CARD_PAD = 2;
+
+/**
+ * 开边框时正文与竖边之间的内衬列数。
+ *
+ * 0 会让字贴着框（`│◆ 模型`），框和正文粘成一团；1 还是偏挤。2 与卡片本身的
+ * CARD_PAD 同宽，于是「框到字」和「屏幕到框」的留白是同一个节奏。
+ */
+const BORDER_INSET = 2;
+
+/** 边框样式：圆角、方角、不画。 */
+export const BORDER_STYLES = ["round", "square", "none"] as const;
+export type BorderStyle = (typeof BORDER_STYLES)[number];
+export const DEFAULT_BORDER: BorderStyle = "round";
+
+interface BorderChars {
+	tl: string;
+	tr: string;
+	bl: string;
+	br: string;
+	h: string;
+	v: string;
+}
+
+/**
+ * 边框字形表。
+ *
+ * 码位都用 `\uXXXX` 写：这个仓库里的私有区字符曾经在写文件时被静默丢掉过
+ * （见 icons.ts 和 tools/patch-icon-codepoints.mjs），box drawing 虽然不在私有区，
+ * 但同样是非 ASCII，用转义写一遍成本为零、少一类事故。
+ */
+const BORDER_CHARS: Record<Exclude<BorderStyle, "none">, BorderChars> = {
+	// ╭ ╮ ╰ ╯ ─ │
+	round: {
+		tl: "╭",
+		tr: "╮",
+		bl: "╰",
+		br: "╯",
+		h: "─",
+		v: "│",
+	},
+	// ┌ ┐ └ ┘ ─ │
+	square: {
+		tl: "┌",
+		tr: "┐",
+		bl: "└",
+		br: "┘",
+		h: "─",
+		v: "│",
+	},
+};
+
+/**
+ * 边框用的 tone。
+ *
+ * 不能用 `borderMuted` —— 名字最像，实测却是全套 token 里最不能用的：对各主题自己的
+ * 背景是 1.30–12.14:1（pi-carbon 1.36、pi-sakura 1.30，等于没画；只有浅底的 pi-paper
+ * 因为反过来变深才有 12.14）。`border` 也只有 1.90–8.00:1。
+ * `dim` 是 3.85–8.63:1，五套主题里最低那档也还看得见，同时仍比正文轻 ——
+ * 框是容器不是内容，能看见边界就够，不该和字抢注意力。
+ */
+const BORDER_TONE: ThemeColor = "dim";
+
+/**
+ * 当前边框样式，模块级状态。
+ *
+ * 和 icons.ts 的 `active` 一个道理：Card 在渲染期读它，配置生效时由 store.ts 同步过来。
+ * 不做成 CardOptions 字段是因为卡片有 4 处构造点，逐个透传迟早漏一处，
+ * 于是出现「配置改了但某个页面还是旧样式」。
+ */
+let activeBorder: BorderStyle = DEFAULT_BORDER;
+
+/** 宽松解析边框样式：大小写和首尾空白都容忍，配置文件是手写的。 */
+export function resolveBorderStyle(raw: string): BorderStyle | undefined {
+	const key = raw.trim().toLowerCase();
+	return BORDER_STYLES.find((s) => s === key);
+}
+
+export function getBorderStyle(): BorderStyle {
+	return activeBorder;
+}
+
+/** 切换边框样式，返回是否被接受（未知值不改现状）。 */
+export function setBorderStyle(style: string): boolean {
+	const parsed = resolveBorderStyle(style);
+	if (parsed === undefined) {
+		return false;
+	}
+	activeBorder = parsed;
+	return true;
+}
 /** 主体最少可见行数。 */
 const MIN_VISIBLE_ROWS = 4;
 /** 主体最多可见行数。 */
@@ -69,9 +161,98 @@ export function onSelectedBg(tone: ThemeColor, selected: boolean): ThemeColor {
 	return selected && LOW_CONTRAST_ON_SELECTED.has(tone) ? "text" : tone;
 }
 
-/** 方括号徽标，用于「已认证 / 未配置 / 只读」这类短状态。 */
+/**
+ * 方括号徽标，用于「已认证 / 未配置 / 只读」这类短状态。
+ *
+ * 括号用 `dim`、文字用语义色：整块同色时括号和文字一样重，读起来是「三个符号」
+ * 而不是「一个带框的词」。括号本身没有信息量，压下去让文字浮出来。
+ */
 export function badge(theme: Theme, text: string, tone: ThemeColor = "accent"): string {
-	return theme.fg(tone, `[${text}]`);
+	return theme.fg("dim", "[") + theme.fg(tone, text) + theme.fg("dim", "]");
+}
+
+/**
+ * 字距：给纯 ASCII 短标签逐字符插空格，做出「小号大写标题」的排版重量。
+ *
+ * 终端里所有字都一样大，字号这个层级手段不存在，能用的只有字重、颜色、字距、空白。
+ * 字距是其中最像「变大」的一个 —— `S Y S T E M` 会读成一个标题而不是一个词。
+ * 只处理 ASCII：中日韩字符本身就占两列，再插空格会散成一串孤字。
+ */
+export function track(text: string): string {
+	return /^[\x20-\x7e]*$/.test(text) ? Array.from(text).join(" ") : text;
+}
+
+/** 分区小标题：字距 + 大写 + 暗色，用在信息页里分段。 */
+export function sectionTitle(theme: Theme, text: string): string {
+	return theme.fg("dim", track(text.toUpperCase()));
+}
+
+/**
+ * 发丝分隔线，可选向右淡出。
+ *
+ * 用 `▁`（下八分之一块）而不是 `─`：`─` 现在是外框的横边（见 BORDER_CHARS），
+ * 卡片**内部**的分隔线再用同一个字符，框和分区就成了同一种视觉语言，
+ * 读起来像把卡片切成了两个格子。`▁` 贴在基线上，是一条细线而不是一段框。
+ *
+ * 淡出用误差扩散抖动，而不是「前一半实线后一半空」—— 后者会看出明显的断点，
+ * 抖动出来的疏密过渡是连续的，相当于在只有一级灰度的介质上做出渐变。
+ */
+export function rule(
+	theme: Theme,
+	width: number,
+	opts: { fade?: boolean; tone?: ThemeColor } = {},
+): string {
+	if (width <= 0) {
+		return "";
+	}
+	const tone = opts.tone ?? "dim";
+	return theme.fg(tone, opts.fade ? dither("▁", width, 1, 0) : "▁".repeat(width));
+}
+
+/**
+ * 抖动填充：在 width 列里按密度从 `from` 渐变到 `to` 落笔，其余留空格。
+ *
+ * 用误差扩散而不是「每隔 n 列画一个」：取模会画出肉眼可见的规律条纹，
+ * 一眼看出是算出来的；扩散攒够一整格才落一笔，疏密没有周期，
+ * 于是在只有「有笔画 / 没笔画」两级的介质上做出了连续渐变。
+ *
+ * 注意 from == to 时扩散会退化成取模，条纹又回来了 —— 所以调用方要给一段真的梯度，
+ * 想要等密度的话直接 repeat 就好，不必绕这里。
+ */
+function dither(char: string, width: number, from: number, to: number): string {
+	let out = "";
+	let acc = 0;
+	for (let i = 0; i < width; i++) {
+		acc += width === 1 ? to : from + ((to - from) * i) / (width - 1);
+		if (acc >= 1) {
+			acc -= 1;
+			out += char;
+		} else {
+			out += " ";
+		}
+	}
+	return out;
+}
+
+/** 迷你折线图，用 Block Elements 的八级高度画一串数值的走势。 */
+export function spark(theme: Theme, values: readonly number[], tone: ThemeColor = "dim"): string {
+	if (values.length === 0) {
+		return "";
+	}
+	const bars = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"] as const;
+	const max = Math.max(...values);
+	const min = Math.min(...values);
+	const span = max - min;
+	return theme.fg(
+		tone,
+		values
+			.map((v) => {
+				// 全部相等时取中间高度，否则会画成一条贴底的线，看着像「没数据」。
+				const t = span === 0 ? 0.5 : (v - min) / span;
+				return bars[Math.min(bars.length - 1, Math.round(t * (bars.length - 1)))];
+			})
+			.join(""),
+	);
 }
 
 /**
@@ -86,13 +267,18 @@ export function sep(theme: Theme, wide = true): string {
 	return theme.fg("dim", wide ? "  ·  " : " · ");
 }
 
+/** 左八分之一到满格，用于进度条的末位精度。 */
+const EIGHTHS = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"] as const;
+
 /**
  * 横向进度条，用于上下文占比、轮次配额等比例量。
  *
- * 实心段和空槽用密度不同的两个字符（`█` / `░`）而不是同一个字符换颜色：
- * 两段同形不同色时，一旦背景色偏亮或用户改了调色板，就分不出填到哪儿了。
- * 两者都取自 Block Elements，不碰 box drawing —— 卡片本身是无边框的，
- * 混进 `─` 会让「这张卡有没有画边框」不再能靠字符判断（见 ui-kit-render 的边框测试）。
+ * 末位用八分之一格：12 格宽本来只能表达 12 级，一格 8.3%，进度条会一跳一大截，
+ * 「42% 和 46%」画出来一模一样。左向部分块把分辨率提到 96 级，条子于是连续地长。
+ *
+ * 空槽用 `░` 而不是同色异形：两段同形不同色时，一旦背景偏亮或用户改了调色板，
+ * 就分不出填到哪儿了。全部取自 Block Elements，不碰 box drawing —— 后者已经是外框的
+ * 语言（见 BORDER_CHARS），进度条借用它会让人以为那一段是框的一部分。
  */
 export function gauge(
 	theme: Theme,
@@ -101,10 +287,14 @@ export function gauge(
 	tone: ThemeColor = "accent",
 ): string {
 	const safe = Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0;
-	const filled = Math.round(safe * width);
+	const exact = safe * width;
+	const full = Math.floor(exact);
+	const partial = EIGHTHS[Math.floor((exact - full) * 8)] ?? "";
+	// 末位那一格被部分块占了，空槽要少画一格，否则整条会宽出一列。
+	const empty = Math.max(0, width - full - (partial ? 1 : 0));
 	return (
-		theme.fg(tone, "█".repeat(filled)) +
-		theme.fg("dim", "░".repeat(Math.max(0, width - filled)))
+		theme.fg(tone, "█".repeat(full) + partial) +
+		theme.fg("dim", "░".repeat(empty))
 	);
 }
 
@@ -118,12 +308,16 @@ export interface KeyHint {
 	label: string;
 }
 
-/** 底部按键提示栏。 */
+/**
+ * 底部按键提示栏。
+ *
+ * 键名加粗、说明用 muted：一行里十来个词，不分轻重就读成一串平铺的字。
+ * 说明文字刻意不用 dim —— 分隔点已经占了 dim，两者同色就分不出
+ * 「这是一组 键+说明」还是「这是一串平铺的词」。
+ */
 export function renderHints(theme: Theme, hints: KeyHint[]): string {
 	return hints
-		// 说明文字用 muted 而不是 dim：分隔点已经占了 dim，两者同色就分不出
-		// 「这是一组 键+说明」还是「这是一串平铺的词」。
-		.map((h) => `${theme.fg("accent", h.key)} ${theme.fg("muted", h.label)}`)
+		.map((h) => `${theme.bold(theme.fg("accent", h.key))} ${theme.fg("muted", h.label)}`)
 		.join(sep(theme));
 }
 
@@ -147,14 +341,20 @@ export interface CardOptions {
 }
 
 /**
- * 无边框卡片：`● 标题` 一行、状态区、主体、提示行，靠缩进和空行分区。
+ * 卡片：标题行、状态区、主体、提示行，靠缩进、发丝线和空行分区。
  * 每一行都补齐到卡片宽度，这样菜单选中行整行反色才不会出现锯齿。
+ *
+ * 边框由模块级的 {@link setBorderStyle} 决定：`round`/`square` 画一圈外框、标题嵌在
+ * 上边框里；`none` 退回原来那套纯缩进排版。两种模式下卡片的**外**宽一致，
+ * 差别只在内容可用宽度少 2 列 —— 于是切换样式不会让菜单跳宽度。
  */
 export class Card implements Component {
 	private readonly theme: Theme;
 	private readonly opts: CardOptions;
 	/** 主体第一行在卡片里的行号，由上一次 render 记下。鼠标坐标换算要用。 */
 	private bodyOffset = 0;
+	/** 主体第一列在卡片里的列号，同上。开边框时会多出边框那一列。 */
+	private bodyCol = CARD_PAD;
 
 	constructor(theme: Theme, opts: CardOptions) {
 		this.theme = theme;
@@ -184,7 +384,9 @@ export class Card implements Component {
 		if (bodyRow < 0) {
 			return false;
 		}
-		return body.clickAt(bodyRow, col - CARD_PAD);
+		// 列偏移也取自上一次 render：开边框时正文右移了一列，写死 CARD_PAD 会让
+		// 点击判定整体偏一格，最右边那一列的点击会落到隔壁。
+		return body.clickAt(bodyRow, col - this.bodyCol);
 	}
 
 	scrollBy(delta: number): void {
@@ -195,28 +397,65 @@ export class Card implements Component {
 	render(viewport: number): string[] {
 		const theme = this.theme;
 		const width = Math.max(24, Math.min(viewport, this.opts.maxWidth ?? MAX_CARD_WIDTH));
-		const inner = width - CARD_PAD;
+		const style = activeBorder;
+		const chars = style === "none" ? undefined : BORDER_CHARS[style];
+		// 开边框时左右各吃掉「边框 1 列 + 内衬 BORDER_INSET 列」。内衬不能省：
+		// 正文贴着竖边时（`│◆ 模型`）字和框粘成一团，框看起来像正文的一部分。
+		// 卡片外宽与无边框时保持一致，只有正文可用宽度变窄。
+		const frameCost = chars ? 2 * (1 + BORDER_INSET) : 0;
+		const inner = width - CARD_PAD - frameCost;
 		const pad = " ".repeat(CARD_PAD);
-		const out: string[] = [pad + this.renderTitle(inner)];
+		const inset = " ".repeat(BORDER_INSET);
+		const out: string[] = [];
+
+		// 无边框时标题自己占一行；开边框时标题嵌在上边框里，省掉那一行。
+		if (chars) {
+			out.push(pad + this.renderTopRail(chars, inner + 2 * BORDER_INSET));
+		} else {
+			out.push(pad + this.renderTitle(inner));
+		}
+
+		// 边框模式下每一行都要包一层竖边，收敛成一个函数，免得漏掉某一段。
+		const row = chars
+			? (line: string) =>
+					pad +
+					theme.fg(BORDER_TONE, chars.v) +
+					inset +
+					padTo(line, inner) +
+					inset +
+					theme.fg(BORDER_TONE, chars.v)
+			: (line: string) => pad + padTo(line, inner);
 
 		const status = this.opts.status?.() ?? [];
 		for (const line of status) {
-			out.push(pad + padTo(line, inner));
+			out.push(row(line));
 		}
 		if (status.length > 0) {
-			// 状态区和主体之间留一行。没有这行时标题、状态、tab 条会挤成一整块，
-			// 眼睛要停一下才能看出「从哪里开始是可以操作的东西」。
-			out.push(pad + padTo("", inner));
+			// 状态区和主体之间要有一次停顿，否则标题、状态、tab 条会挤成一整块，
+			// 眼睛得找一下才知道「从哪儿开始是能操作的东西」。
+			// 用淡出发丝线而不是空行：占的行数一样（卡片高度不变），但它多说了一句
+			// 「线以上是只读信息，线以下是可操作项」—— 空行只能表达停顿。
+			out.push(row(rule(theme, inner, { fade: true })));
 		}
 		this.bodyOffset = out.length;
+		this.bodyCol = CARD_PAD + (chars ? 1 + BORDER_INSET : 0);
 		for (const line of this.opts.body.render(inner)) {
-			out.push(pad + padTo(line, inner));
+			out.push(row(line));
 		}
 		const hints = this.opts.hints?.() ?? [];
 		if (hints.length > 0) {
 			// 空行也要补齐到卡片宽度：卡片的每一行等宽是选中行整行反色不出锯齿的前提。
-			out.push(pad + padTo("", inner));
-			out.push(pad + padTo(renderHints(theme, hints), inner));
+			out.push(row(""));
+			out.push(row(renderHints(theme, hints)));
+		}
+		if (chars) {
+			out.push(
+				pad +
+					theme.fg(
+						BORDER_TONE,
+						chars.bl + chars.h.repeat(inner + 2 * BORDER_INSET) + chars.br,
+					),
+			);
 		}
 		// overlay 只覆盖自己那几列，窄于终端时两侧会漏出对话内容。
 		if (this.opts.fillWidth && viewport > width) {
@@ -225,16 +464,89 @@ export class Card implements Component {
 		return out;
 	}
 
-	private renderTitle(inner: number): string {
+	/**
+	 * 上边框：`╭─ 标题 ────────── 右侧小字 ─╮`。
+	 *
+	 * 标题嵌在边框里而不是另占一行：卡片本来就靠上边界表达「这里开始」，
+	 * 再单独给标题一行等于说了两遍，还白吃一行高度 —— 终端里高度是最紧的资源。
+	 *
+	 * 标题用 text + bold，边框用 borderMuted：框是容器，字是内容，同色时框会和标题
+	 * 一样重，读起来是「一条画满字符的线」而不是「一张有名字的卡」。
+	 */
+	private renderTopRail(chars: BorderChars, inner: number): string {
 		const theme = this.theme;
-		const bullet = theme.fg("accent", "●");
+		const rail = (n: number) => theme.fg(BORDER_TONE, chars.h.repeat(Math.max(0, n)));
+		const corner = (c: string) => theme.fg(BORDER_TONE, c);
 		const title = theme.bold(theme.fg("text", this.opts.title));
 		const right = this.opts.titleRight;
-		return splitRow(
-			`${bullet} ${title}`,
-			right ? theme.fg("dim", right) : "",
-			inner,
+		// 标题两侧各留一格空隙，字不贴着横线。
+		let titleCost = visibleWidth(this.opts.title) + 2;
+		if (titleCost + 2 > inner) {
+			// 窄到放不下完整标题：截断而不是整条抹掉。卡片没了名字比名字断一截更糟 ——
+			// 断一截还能认出是哪张卡，抹掉就只剩一条线。
+			// 留 3 列给「左横线 + 右横线 + 省略号的余量」。
+			const room = inner - 4;
+			if (room < 2) {
+				return corner(chars.tl) + rail(inner) + corner(chars.tr);
+			}
+			const cut = truncateToWidth(this.opts.title, room);
+			return (
+				corner(chars.tl) +
+				rail(1) +
+				` ${theme.bold(theme.fg("text", cut))} ` +
+				rail(Math.max(0, inner - visibleWidth(cut) - 3)) +
+				corner(chars.tr)
+			);
+		}
+		const rightCost = right ? visibleWidth(right) + 3 : 0;
+		if (!right || titleCost + rightCost + 1 > inner) {
+			return (
+				corner(chars.tl) +
+				rail(1) +
+				` ${title} ` +
+				rail(inner - titleCost - 1) +
+				corner(chars.tr)
+			);
+		}
+		return (
+			corner(chars.tl) +
+			rail(1) +
+			` ${title} ` +
+			rail(inner - titleCost - rightCost - 1) +
+			` ${theme.fg("dim", right)} ` +
+			rail(1) +
+			corner(chars.tr)
 		);
+	}
+
+	/**
+	 * 标题行：`▌ 标题 ·········· 右侧小字`。
+	 *
+	 * 行首用实体条而不是圆点：圆点是装饰，条是锚 —— 它和选中行的光标条同宽同色，
+	 * 于是「这张卡从哪里开始」和「你现在在哪一行」变成同一种视觉语言。
+	 *
+	 * 中间的空白改成向右渐密的引线（目录里那种 leaders）。splitRow 直接拿空格填，
+	 * 96 列宽的卡片上标题和右侧小字之间会空出半屏，两端读起来像两条无关的信息；
+	 * 引线把它们连成一行，且越靠右越密，视线自然被送到那头。
+	 */
+	private renderTitle(inner: number): string {
+		const theme = this.theme;
+		const bar = theme.fg("accent", "▌");
+		const title = theme.bold(theme.fg("text", this.opts.title));
+		const right = this.opts.titleRight;
+		const left = `${bar} ${title}`;
+		if (!right) {
+			return padTo(left, inner);
+		}
+		// 两端各留一格空隙，引线不贴着文字。
+		const gap = inner - visibleWidth(left) - visibleWidth(right) - 2;
+		if (gap < 2) {
+			return splitRow(left, theme.fg("dim", right), inner);
+		}
+		// 起点 0.35 而不是更稀：引线的作用是把标题和右侧的值连起来，断了就不是引线了。
+		// 密度低于 1/3 时会出现五六列的空档，读起来像渲染坏了而不像一条线。
+		// 终点接近 1 让它往右收紧，视线顺着密起来的方向走到值上。
+		return `${left} ${theme.fg("dim", dither("·", gap, 0.35, 0.95))} ${theme.fg("dim", right)}`;
 	}
 }
 
@@ -738,8 +1050,13 @@ export class MenuList implements Component {
 			}
 			const active = i === this.activeTab && !this.query;
 			const text = ` ${name} `;
+			// 当前栏用「下划线 + 强调色 + 加粗」，不再铺 selectedBg 色块。
+			// 色块和菜单选中行是同一个 token，两者上下相邻时读起来像「两个都被选中了」；
+			// 下划线是分栏控件的固有语汇（浏览器里的 tab 就长这样），既不撞色块，
+			// 也把「当前在哪一栏」画在了栏名底下而不是糊在它身上。
+			// 三个信号叠着给：万一终端不画下划线，加粗和颜色仍然能分辨。
 			out += active
-				? theme.bg("selectedBg", theme.bold(theme.fg("text", text)))
+				? theme.bold(theme.fg("accent", theme.underline(text)))
 				: theme.fg("muted", text);
 			hits.push({ from: col, to: col + visibleWidth(text), tab: i });
 			col += visibleWidth(text);
@@ -765,7 +1082,11 @@ export class MenuList implements Component {
 		inner: number,
 	): string {
 		const theme = this.theme;
-		const cursor = selected ? theme.fg("accent", "› ") : "  ";
+		// 光标是一条贴着行首的实体色带，不是箭头。箭头是个字符，和标签一样是「图形」，
+		// 眼睛得先认出它才知道选中了哪行；色带是一段连续的边缘，扫一眼就定位到了。
+		// 它落在 selectedBg 之上，于是选中行的左沿有一道实心强调色，行本身微亮 ——
+		// 两级信号，比「一个箭头 + 一整块底色」更清楚谁是当前项。
+		const cursor = selected ? theme.fg("accent", "▌ ") : "  ";
 		const hotkey = cols.hotkey
 			? // 未选中的直达键早先用 borderMuted，在深色终端上大约 2.2:1，
 				// 等于把「按哪个键」这条信息藏起来了。dim 约 3.7:1，仍然次要但认得出。
@@ -773,7 +1094,7 @@ export class MenuList implements Component {
 			: "";
 		const check = cols.check
 			? this.checked.has(item.id)
-				? theme.fg("success", "[✓] ")
+				? theme.fg("success", `[${icon("check")}] `)
 				// 空勾选框早先用 borderMuted，等于看不见 —— 多选菜单里「哪些没勾」
 				// 和「哪些勾了」一样是信息。
 				: theme.fg(selected ? "text" : "dim", "[ ] ")

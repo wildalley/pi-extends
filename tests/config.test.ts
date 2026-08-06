@@ -232,3 +232,36 @@ test("atomicWriteJson 原子写入并保留内容", async () => {
 	const leftovers = fs.readdirSync(path.dirname(target)).filter((f) => f.endsWith(".tmp"));
 	assert.equal(leftovers.length, 0);
 });
+
+test("icons 字段接受四套图标集，大小写与空格会归一化", () => {
+	const base = emptyBase();
+	for (const [input, want] of [
+		["lucide", "lucide"],
+		["nerd", "nerd"],
+		["unicode", "unicode"],
+		["ascii", "ascii"],
+		// 配置文件是手写的，这两种笔误认出来比丢掉有用；归一化后的值随保存写回文件。
+		["LUCIDE", "lucide"],
+		["  nerd ", "nerd"],
+	] as const) {
+		const result = sanitizeConfig({ icons: input }, base, "inherit");
+		assert.equal(result.config.icons, want, `icons: ${JSON.stringify(input)}`);
+		assert.deepEqual(result.warnings, [], `icons: ${JSON.stringify(input)} 不该有警告`);
+	}
+});
+
+test("icons 未知取值给出警告并保留基线值", () => {
+	const base = { ...emptyBase(), icons: "nerd" as const };
+	const result = sanitizeConfig({ icons: "emoji" }, base, "inherit");
+	assert.equal(result.config.icons, "nerd");
+	assert.equal(result.warnings.length, 1);
+	assert.match(result.warnings[0], /icons/u);
+	// 警告要把可选值列出来，否则用户还得翻文档才知道该填什么。
+	assert.match(result.warnings[0], /lucide/u);
+});
+
+test("icons 缺省时继承上一层，不被默认值覆盖", () => {
+	const base = { ...emptyBase(), icons: "ascii" as const };
+	const result = sanitizeConfig({}, base, "inherit");
+	assert.equal(result.config.icons, "ascii");
+});

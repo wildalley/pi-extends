@@ -4,58 +4,131 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "$schema": { "type": "string" },
-    "version": { "type": "integer", "const": 1 },
-    "theme": { "type": "string" },
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "theme": {
+      "type": "string"
+    },
+    "icons": {
+      "description": "界面图标字形集。lucide 需要把 lucide.ttf 加进终端 fallback 字体；nerd 需要 Nerd Font 补丁字体；unicode 任何字体都能显示；ascii 给纯文本终端。",
+      "enum": [
+        "lucide",
+        "nerd",
+        "unicode",
+        "ascii"
+      ]
+    },
+    "border": {
+      "description": "卡片边框样式。round 圆角外框、square 方角外框、none 不画框（退回纯缩进排版）。",
+      "enum": [
+        "round",
+        "square",
+        "none"
+      ]
+    },
     "currentModel": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["model", "thinking"],
+      "required": [
+        "model",
+        "thinking"
+      ],
       "properties": {
-        "model": { "type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$" },
-        "thinking": { "$ref": "#/$defs/thinkingLevel" }
+        "model": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$"
+        },
+        "thinking": {
+          "$ref": "#/$defs/thinkingLevel"
+        }
       }
     },
     "roles": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "scout": { "$ref": "#/$defs/role" },
-        "planner": { "$ref": "#/$defs/role" },
-        "worker": { "$ref": "#/$defs/role" },
-        "reviewer": { "$ref": "#/$defs/role" }
+        "scout": {
+          "$ref": "#/$defs/role"
+        },
+        "planner": {
+          "$ref": "#/$defs/role"
+        },
+        "worker": {
+          "$ref": "#/$defs/role"
+        },
+        "reviewer": {
+          "$ref": "#/$defs/role"
+        }
       }
     },
     "routes": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "default": { "$ref": "#/$defs/route" },
-        "smol": { "$ref": "#/$defs/route" },
-        "slow": { "$ref": "#/$defs/route" },
-        "plan": { "$ref": "#/$defs/route" },
-        "commit": { "$ref": "#/$defs/route" },
-        "vision": { "$ref": "#/$defs/route" },
-        "designer": { "$ref": "#/$defs/route" },
-        "task": { "$ref": "#/$defs/route" },
-        "advisor": { "$ref": "#/$defs/route" },
-        "tiny": { "$ref": "#/$defs/route" }
+        "default": {
+          "$ref": "#/$defs/route"
+        },
+        "smol": {
+          "$ref": "#/$defs/route"
+        },
+        "slow": {
+          "$ref": "#/$defs/route"
+        },
+        "plan": {
+          "$ref": "#/$defs/route"
+        },
+        "commit": {
+          "$ref": "#/$defs/route"
+        },
+        "vision": {
+          "$ref": "#/$defs/route"
+        },
+        "designer": {
+          "$ref": "#/$defs/route"
+        },
+        "task": {
+          "$ref": "#/$defs/route"
+        },
+        "advisor": {
+          "$ref": "#/$defs/route"
+        },
+        "tiny": {
+          "$ref": "#/$defs/route"
+        }
       }
     },
     "advisor": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "minSeverity": { "enum": ["aside", "concern", "blocker"] },
-        "maxPerSession": { "type": "integer", "minimum": 1 }
+        "enabled": {
+          "type": "boolean"
+        },
+        "minSeverity": {
+          "enum": [
+            "aside",
+            "concern",
+            "blocker"
+          ]
+        },
+        "maxPerSession": {
+          "type": "integer",
+          "minimum": 1
+        }
       }
     },
     "keywords": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" }
+        "enabled": {
+          "type": "boolean"
+        }
       }
     },
     "orchestration": {
@@ -64,7 +137,11 @@
       "description": "自动分工：识别适合拆分的任务并给出建议或直接编排。",
       "properties": {
         "mode": {
-          "enum": ["off", "suggest", "auto"],
+          "enum": [
+            "off",
+            "suggest",
+            "auto"
+          ],
           "description": "off 不提示；suggest 给建议卡片、确认后注入；auto 直接注入编排指令。"
         },
         "minComplexity": {
@@ -76,49 +153,103 @@
     },
     "providers": {
       "type": "array",
-      "items": { "$ref": "#/$defs/customProvider" }
+      "items": {
+        "$ref": "#/$defs/customProvider"
+      }
     },
     "subagents": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "maxParallelTasks": { "type": "integer", "minimum": 1 },
-        "maxConcurrency": { "type": "integer", "minimum": 1 }
+        "maxParallelTasks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxConcurrency": {
+          "type": "integer",
+          "minimum": 1
+        }
       }
     },
     "goal": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "defaultMode": { "enum": ["focused", "autopilot"] },
-        "maxAutoTurns": { "type": "integer", "minimum": 1 }
+        "defaultMode": {
+          "enum": [
+            "focused",
+            "autopilot"
+          ]
+        },
+        "maxAutoTurns": {
+          "type": "integer",
+          "minimum": 1
+        }
       }
     }
   },
-  "required": ["version", "theme", "currentModel", "roles", "providers", "subagents", "goal"],
+  "required": [
+    "version",
+    "theme",
+    "currentModel",
+    "roles",
+    "providers",
+    "subagents",
+    "goal"
+  ],
   "$defs": {
     "thinkingLevel": {
-      "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+      "enum": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     "role": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "model": { "type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$" },
-        "thinking": { "$ref": "#/$defs/thinkingLevel" },
+        "model": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$"
+        },
+        "thinking": {
+          "$ref": "#/$defs/thinkingLevel"
+        },
         "tools": {
           "type": "array",
-          "items": { "enum": ["read", "grep", "find", "ls", "bash", "edit", "write"] }
+          "items": {
+            "enum": [
+              "read",
+              "grep",
+              "find",
+              "ls",
+              "bash",
+              "edit",
+              "write"
+            ]
+          }
         },
-        "systemPrompt": { "type": "string" }
+        "systemPrompt": {
+          "type": "string"
+        }
       }
     },
     "route": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "model": { "type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$" },
-        "thinking": { "$ref": "#/$defs/thinkingLevel" },
+        "model": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$"
+        },
+        "thinking": {
+          "$ref": "#/$defs/thinkingLevel"
+        },
         "fallback": {
           "type": "array",
           "items": {
@@ -141,27 +272,74 @@
     "customProvider": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "name", "baseUrl", "api", "apiKeyEnv", "models"],
+      "required": [
+        "id",
+        "name",
+        "baseUrl",
+        "api",
+        "apiKeyEnv",
+        "models"
+      ],
       "properties": {
-        "id": { "type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]*$", "maxLength": 64 },
-        "name": { "type": "string" },
-        "baseUrl": { "type": "string", "format": "uri" },
-        "api": { "enum": ["openai-completions", "openai-responses", "anthropic-messages"] },
-        "apiKeyEnv": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]*$",
+          "maxLength": 64
+        },
+        "name": {
+          "type": "string"
+        },
+        "baseUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "api": {
+          "enum": [
+            "openai-completions",
+            "openai-responses",
+            "anthropic-messages"
+          ]
+        },
+        "apiKeyEnv": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
         "models": {
           "type": "array",
           "minItems": 1,
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["id"],
+            "required": [
+              "id"
+            ],
             "properties": {
-              "id": { "type": "string" },
-              "name": { "type": "string" },
-              "reasoning": { "type": "boolean" },
-              "input": { "type": "array", "items": { "enum": ["text", "image"] } },
-              "contextWindow": { "type": "integer", "minimum": 1 },
-              "maxTokens": { "type": "integer", "minimum": 1 }
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "reasoning": {
+                "type": "boolean"
+              },
+              "input": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "text",
+                    "image"
+                  ]
+                }
+              },
+              "contextWindow": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "maxTokens": {
+                "type": "integer",
+                "minimum": 1
+              }
             }
           }
         }

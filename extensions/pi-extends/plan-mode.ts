@@ -2,6 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key } from "@earendil-works/pi-tui";
+import { icon } from "./icons.ts";
 import { extractTodoItems, isSafeCommand, markCompletedSteps, type TodoItem } from "./plan-utils.ts";
 
 const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls"];
@@ -70,9 +71,9 @@ function getNormalModeTools(activeToolNames: string[]): string[] {
 function updateStatus(ctx: ExtensionContext): void {
 	if (executionMode && todoItems.length > 0) {
 		const completed = todoItems.filter((t) => t.completed).length;
-		ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("accent", `📋 ${completed}/${todoItems.length}`));
+		ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("accent", `${icon("planMode")} ${completed}/${todoItems.length}`));
 	} else if (planModeEnabled) {
-		ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", "⏸ plan"));
+		ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", `${icon("pause")} plan`));
 	} else {
 		ctx.ui.setStatus("plan-mode", undefined);
 	}
@@ -80,9 +81,9 @@ function updateStatus(ctx: ExtensionContext): void {
 	if (executionMode && todoItems.length > 0) {
 		const lines = todoItems.map((item) => {
 			if (item.completed) {
-				return ctx.ui.theme.fg("success", "☑ ") + ctx.ui.theme.fg("muted", ctx.ui.theme.strikethrough(item.text));
+				return ctx.ui.theme.fg("success", `${icon("check")} `) + ctx.ui.theme.fg("muted", ctx.ui.theme.strikethrough(item.text));
 			}
-			return `${ctx.ui.theme.fg("muted", "☐ ")}${item.text}`;
+			return `${ctx.ui.theme.fg("muted", `${icon("radioOff")} `)}${item.text}`;
 		});
 		ctx.ui.setWidget("plan-todos", lines);
 	} else {
@@ -133,7 +134,7 @@ function disablePlanMode(pi: ExtensionAPI, ctx: ExtensionContext): void {
 
 function showPlanStatus(ctx: ExtensionContext): void {
 	if (planModeEnabled) {
-		const items = todoItems.map((t) => `${t.step}. ${t.completed ? "✓" : "○"} ${t.text}`).join("\n");
+		const items = todoItems.map((t) => `${t.step}. ${t.completed ? icon("check") : icon("radioOff")} ${t.text}`).join("\n");
 		ctx.ui.notify(`Plan 模式：已启用${executionMode ? "（执行中）" : ""}\n${items || "尚无计划"}`, "info");
 	} else {
 		ctx.ui.notify("Plan 模式：未启用（/plan on）", "info");
@@ -222,7 +223,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 				ctx.ui.notify("没有计划步骤。先用 /plan on 产出计划。", "info");
 				return;
 			}
-			const list = todoItems.map((item, i) => `${i + 1}. ${item.completed ? "✓" : "○"} ${item.text}`).join("\n");
+			const list = todoItems.map((item, i) => `${i + 1}. ${item.completed ? icon("check") : icon("radioOff")} ${item.text}`).join("\n");
 			ctx.ui.notify(`计划进度：\n${list}`, "info");
 		},
 	});

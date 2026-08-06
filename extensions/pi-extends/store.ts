@@ -22,6 +22,8 @@ import {
 	type ConfigScope,
 	type PiExtendsConfig,
 } from "./config.ts";
+import { setIconSet } from "./icons.ts";
+import { setBorderStyle } from "./ui-kit.ts";
 
 /** 读目标层现有文档；不存在或坏了都当空文档，避免写回时丢掉整层。 */
 function readRawOrEmpty(filePath: string): unknown {
@@ -58,6 +60,12 @@ export function ensureLoaded(cwd: string, trusted: boolean): ConfigLoadResult {
 		cwd,
 		trusted,
 	};
+	// 图标集和边框样式都是渲染期读的模块级状态（见 icons.ts 的 `active`、
+	// ui-kit.ts 的 `activeBorder`），必须在配置生效的同一时刻同步过去。
+	// 放在这里而不是各个界面里：加载与重载都只走这一个入口，
+	// 漏一处就会出现「配置改了但某个页面还是旧样式」。
+	setIconSet(result.config.icons);
+	setBorderStyle(result.config.border);
 	return result;
 }
 

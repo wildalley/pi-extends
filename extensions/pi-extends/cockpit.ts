@@ -16,6 +16,18 @@ import { ADVISOR_SEVERITIES, ORCHESTRATION_MODES, type AdvisorSeverity, type Orc
 import { editConfig } from "./config-ui.ts";
 import { footerController } from "./footer.ts";
 import { getGoalState, runGoalCommand } from "./goal-mode.ts";
+import {
+	ICON_SETS,
+	getIconSet,
+	icon,
+	iconIn,
+	iconSample,
+	iconSetForcedByEnv,
+	resolveIconSet,
+	setIconSet,
+	type IconName,
+	type IconSet,
+} from "./icons.ts";
 import { KEYWORD_HINTS, MAGIC_KEYWORDS } from "./keywords.ts";
 import { isPlanExecuting, isPlanModeActive, planController } from "./plan-mode.ts";
 import { collectPlanStatus, openPlansPage } from "./plans.ts";
@@ -50,6 +62,11 @@ import {
 	badge,
 	gauge,
 	kv,
+	padTo,
+	BORDER_STYLES,
+	getBorderStyle,
+	resolveBorderStyle,
+	setBorderStyle,
 	runInfoPage,
 	runMenu,
 	runPrompt,
@@ -107,7 +124,7 @@ function statusLines(ctx: ExtensionCommandContext, theme: Theme): string[] {
 	if (sessionModel && sessionModel !== config.currentModel.model) {
 		modelParts.push(theme.fg("dim", `配置 ${shortModel(config.currentModel.model)}`));
 	}
-	const lines = [kv(theme, "◆", "模型", modelParts.join(dot))];
+	const lines = [kv(theme, icon("model"), "模型", modelParts.join(dot))];
 
 	const goal = getGoalState();
 	const providers = collectProviderStatus(ctx, config);
@@ -115,7 +132,7 @@ function statusLines(ctx: ExtensionCommandContext, theme: Theme): string[] {
 	lines.push(
 		kv(
 			theme,
-			"◈",
+			icon("status"),
 			"运行",
 			[
 				`${theme.fg("dim", "Goal")} ${theme.fg(goalTone(goal.status), goal.status)}`,
@@ -133,7 +150,7 @@ function statusLines(ctx: ExtensionCommandContext, theme: Theme): string[] {
 		lines.push(
 			kv(
 				theme,
-				"▤",
+				icon("ctx"),
 				"上下文",
 				[
 					`${gauge(theme, pct / 100, 12, tone)} ${theme.fg(tone, `${Math.round(pct)}%`)}`,
@@ -166,16 +183,39 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 		{
 			id: "theme",
 			group: "外观",
-			icon: "◐",
+			icon: icon("theme"),
 			label: "主题",
 			hotkey: "1",
 			value: config.theme,
 			hint: "移动光标即时预览",
 		},
 		{
+			id: "icons",
+			group: "外观",
+			icon: icon("keywords"),
+			label: "图标集",
+			hotkey: "i",
+			value: getIconSet(),
+			tone: iconSetForcedByEnv() ? "warning" : undefined,
+			hint: iconSetForcedByEnv()
+				? `被 PI_EXTENDS_ICONS 锁定 · 四套字形并排预览`
+				: "lucide · nerd · unicode · ascii，四套并排预览",
+			keywords: "icon 图标 字形 字体 lucide nerd font 豆腐块",
+		},
+		{
+			id: "border",
+			group: "外观",
+			icon: icon("view"),
+			label: "卡片边框",
+			hotkey: "b",
+			value: getBorderStyle(),
+			hint: "round · square · none，移动光标即时预览",
+			keywords: "border 边框 外框 方框 圆角 frame box",
+		},
+		{
 			id: "footer",
 			group: "外观",
-			icon: "▤",
+			icon: icon("footer"),
 			label: "状态栏 Footer",
 			hotkey: "2",
 			value: footerOn ? "on" : "off",
@@ -185,7 +225,7 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 		{
 			id: "model",
 			group: "模型",
-			icon: "◆",
+			icon: icon("model"),
 			label: "主模型",
 			hotkey: "3",
 			value: shortModel(config.currentModel.model),
@@ -194,7 +234,7 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 		{
 			id: "roles",
 			group: "模型",
-			icon: "◇",
+			icon: icon("roles"),
 			label: "角色模型与权限",
 			hotkey: "4",
 			value: `${customRoles}/${ROLE_NAMES.length} 已定制`,
@@ -203,7 +243,7 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 		{
 			id: "routes",
 			group: "模型",
-			icon: "◈",
+			icon: icon("routes"),
 			label: "路由角色",
 			hotkey: "r",
 			value: `${customizedRouteCount(config)}/${ROUTE_NAMES.length} 已定制`,
@@ -212,7 +252,7 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 		{
 			id: "plans",
 			group: "模型",
-			icon: "◉",
+			icon: icon("plans"),
 			label: "Coding Plan 与 API",
 			hotkey: "5",
 			value: readyPlans === 0 ? "未开通" : `${readyPlans} 家已开通`,
@@ -223,7 +263,7 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 		{
 			id: "providers",
 			group: "模型",
-			icon: "◈",
+			icon: icon("providers"),
 			label: "自定义厂商",
 			hotkey: "p",
 			value: `${authedProviders}/${providers.length} 已认证`,
@@ -232,7 +272,7 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 		{
 			id: "subagents",
 			group: "工作流",
-			icon: "▶",
+			icon: icon("subagents"),
 			label: "子代理",
 			hotkey: "6",
 			value: `并行 ${config.subagents.maxConcurrency}`,
@@ -241,7 +281,7 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 		{
 			id: "goal",
 			group: "工作流",
-			icon: "◉",
+			icon: icon("goal"),
 			label: "Goal 模式",
 			hotkey: "7",
 			value: goal.status,
@@ -251,7 +291,7 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 		{
 			id: "plan",
 			group: "工作流",
-			icon: "▦",
+			icon: icon("planMode"),
 			label: "Plan 模式",
 			hotkey: "8",
 			value: planLabel(),
@@ -260,7 +300,7 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 		{
 			id: "prompts",
 			group: "工作流",
-			icon: "▪",
+			icon: icon("prompts"),
 			label: "工作流提示词",
 			hotkey: "9",
 			value: `${WORKFLOW_PROMPTS.length} 个`,
@@ -269,7 +309,7 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 		{
 			id: "advisor",
 			group: "自动化",
-			icon: "▲",
+			icon: icon("advisor"),
 			label: "Advisor 旁审",
 			hotkey: "a",
 			value: advisorOn ? "on" : "off",
@@ -279,7 +319,7 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 		{
 			id: "keywords",
 			group: "自动化",
-			icon: "✦",
+			icon: icon("keywords"),
 			label: "魔法关键词",
 			hotkey: "k",
 			value: config.keywords.enabled ? "on" : "off",
@@ -289,7 +329,7 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 		{
 			id: "orchestration",
 			group: "自动化",
-			icon: "▨",
+			icon: icon("orchestration"),
 			label: "自动分工",
 			hotkey: "d",
 			value: config.orchestration.mode,
@@ -304,7 +344,7 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 		{
 			id: "status",
 			group: "系统",
-			icon: "▣",
+			icon: icon("status"),
 			label: "状态总览",
 			hotkey: "s",
 			hint: "模型 / 角色 / 厂商 / 上下文一页看全",
@@ -312,7 +352,7 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 		{
 			id: "config",
 			group: "系统",
-			icon: "○",
+			icon: icon("config"),
 			label: "配置管理",
 			hotkey: "c",
 			hint: ".pi/pi-extends.json · 校验 / 重载 / 生成",
@@ -322,7 +362,7 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 			// 只能把命令填进输入框帮用户跳过去。详见 dispatch 里的说明。
 			id: "pi-settings",
 			group: "系统",
-			icon: "⚙",
+			icon: icon("settings"),
 			label: "pi 原生设置",
 			hotkey: "o",
 			hint: "跳转 /settings · pi 自带的 34 项开关，不由本扩展管理",
@@ -368,6 +408,12 @@ async function dispatch(ctx: ExtensionCommandContext, id: string): Promise<boole
 	switch (id) {
 		case "theme":
 			await themeWizard(ctx);
+			return true;
+		case "border":
+			await borderWizard(ctx);
+			return true;
+		case "icons":
+			await iconWizard(ctx);
 			return true;
 		case "footer":
 			await footerMenu(ctx);
@@ -468,7 +514,7 @@ function themePreview(theme: Theme): string[] {
 		theme.fg("toolDiffAdded", "+ added"),
 		theme.fg("toolDiffRemoved", "- removed"),
 	].join("  ");
-	return [kv(theme, "◐", "色板", swatch), kv(theme, "▤", "示例", sample)];
+	return [kv(theme, icon("theme"), "色板", swatch), kv(theme, icon("prompts"), "示例", sample)];
 }
 
 async function themeWizard(ctx: ExtensionCommandContext): Promise<void> {
@@ -476,7 +522,7 @@ async function themeWizard(ctx: ExtensionCommandContext): Promise<void> {
 	const names = themeNames(ctx);
 	const items: MenuItem[] = names.map((name, i) => ({
 		id: name,
-		icon: name === original ? "◉" : "○",
+		icon: icon(name === original ? "radioOn" : "radioOff"),
 		label: name,
 		hotkey: i < 9 ? String(i + 1) : undefined,
 		hint: name === original ? "当前" : "",
@@ -498,6 +544,156 @@ async function themeWizard(ctx: ExtensionCommandContext): Promise<void> {
 	await applyTheme(ctx, picked);
 }
 
+/** 预览行用的图标名，覆盖菜单里最常见的几类，够判断字体有没有装上。 */
+const ICON_PREVIEW: IconName[] = [
+	"model",
+	"roles",
+	"routes",
+	"goal",
+	"planMode",
+	"advisor",
+	"keywords",
+	"git",
+	"cost",
+	"check",
+];
+
+const ICON_SET_HINTS: Record<IconSet, string> = {
+	lucide: "Lucide 官方字体，需装 lucide.ttf（见 README）",
+	nerd: "Nerd Font 补丁字体，多数开发机的等宽字体已自带",
+	unicode: "几何图形，任何字体都有，安全兜底",
+	ascii: "纯 ASCII，给老终端与日志重定向",
+};
+
+/**
+ * 边框样式选择页。
+ *
+ * 这一页不需要额外的预览区：卡片自己就是预览。高亮即切换，于是你正在看的这张卡
+ * 的外框当场变成候选样式 —— 「选它会长什么样」和「现在长什么样」是同一个东西。
+ */
+async function borderWizard(ctx: ExtensionCommandContext): Promise<void> {
+	const original = getBorderStyle();
+	const hints: Record<string, string> = {
+		round: "圆角外框，标题嵌在上边框里",
+		square: "方角外框，同上，直角更硬朗",
+		none: "不画框，退回纯缩进排版，最省行数",
+	};
+
+	const items: MenuItem[] = BORDER_STYLES.map((style, i) => ({
+		id: style,
+		icon: icon(style === original ? "radioOn" : "radioOff"),
+		label: style,
+		hotkey: String(i + 1),
+		hint: hints[style],
+	}));
+
+	const picked = await runMenu(ctx, {
+		title: "卡片边框",
+		titleRight: `${BORDER_STYLES.length} 种可选`,
+		items,
+		initialId: original,
+		onHighlight: (id) => {
+			setBorderStyle(id);
+		},
+	});
+
+	if (picked === undefined) {
+		setBorderStyle(original);
+		return;
+	}
+	const style = resolveBorderStyle(picked);
+	if (!style) {
+		return;
+	}
+	setBorderStyle(style);
+	await editConfig(
+		ctx,
+		(config) => {
+			config.border = style;
+		},
+		{ touched: ["border"], notify: `卡片边框已切换为 ${style}。` },
+	);
+}
+
+/**
+ * 图标集选择页。
+ *
+ * 关键是那张四行并排的预览表：装没装字体本机说不清，但四套字形摆在一起，
+ * 哪一行是豆腐块、哪一行有字形，用户自己一眼就看出来了 —— 这比任何文字说明都直接。
+ * 所以这一页不解释「你需要装字体」，而是让用户直接看见结果再挑。
+ */
+async function iconWizard(ctx: ExtensionCommandContext): Promise<void> {
+	const original = getIconSet();
+	const envForced = iconSetForcedByEnv();
+
+	const items: MenuItem[] = ICON_SETS.map((set, i) => ({
+		id: set,
+		icon: iconIn(set, set === original ? "radioOn" : "radioOff"),
+		label: set,
+		hotkey: String(i + 1),
+		value: iconSample(set, ICON_PREVIEW.slice(0, 6)),
+		hint: ICON_SET_HINTS[set],
+		tone: envForced && envForced !== set ? "muted" : undefined,
+	}));
+
+	const picked = await runMenu(ctx, {
+		title: "图标集",
+		titleRight: envForced ? `PI_EXTENDS_ICONS=${envForced} 已锁定` : `${ICON_SETS.length} 套可选`,
+		status: (theme) => {
+			const lines = [
+				kv(theme, icon("theme"), "预览", theme.fg("dim", "四套并排，有字形的那套就是你的字体支持的")),
+				"",
+			];
+			for (const set of ICON_SETS) {
+				const label = set === getIconSet() ? theme.bold(theme.fg("accent", padTo(set, 8))) : theme.fg("dim", padTo(set, 8));
+				lines.push(`  ${label} ${theme.fg("text", iconSample(set, ICON_PREVIEW))}`);
+			}
+			if (envForced) {
+				lines.push(
+					"",
+					kv(
+						theme,
+						icon("warn"),
+						"注意",
+						theme.fg("warning", `环境变量 PI_EXTENDS_ICONS=${envForced} 优先于配置，改这里不会生效`),
+					),
+				);
+			}
+			return lines;
+		},
+		items,
+		initialId: original,
+		// 高亮即预览：切过去之后整个界面（包括这一页自己的光标与勾选）都用新字形重画，
+		// 于是「选中会变成什么样」不用想象，直接看到。
+		onHighlight: (id) => {
+			const set = resolveIconSet(id);
+			if (set) {
+				setIconSet(set);
+			}
+		},
+	});
+
+	if (picked === undefined) {
+		setIconSet(original);
+		return;
+	}
+	const set = resolveIconSet(picked);
+	if (!set) {
+		return;
+	}
+	if (!setIconSet(set)) {
+		ctx.ui.notify(`图标集被环境变量 PI_EXTENDS_ICONS=${envForced} 锁定，未改动。`, "warning");
+		return;
+	}
+	await editConfig(
+		ctx,
+		(config) => {
+			config.icons = set;
+		},
+		{ touched: ["icons"], notify: `图标集已切换为 ${set}。` },
+	);
+}
+
 export async function pickTheme(ctx: ExtensionCommandContext): Promise<string | undefined> {
 	if (ctx.mode !== "tui") {
 		return ctx.ui.select("选择主题（Esc 返回）", themeNames(ctx), { timeout: 60000 });
@@ -505,7 +701,7 @@ export async function pickTheme(ctx: ExtensionCommandContext): Promise<string | 
 	const current = getConfig(ctx.cwd, ctx.isProjectTrusted()).theme;
 	const items: MenuItem[] = themeNames(ctx).map((name, i) => ({
 		id: name,
-		icon: name === current ? "◉" : "○",
+		icon: icon(name === current ? "radioOn" : "radioOff"),
 		label: name,
 		hotkey: i < 9 ? String(i + 1) : undefined,
 	}));
@@ -569,7 +765,7 @@ async function currentModelWizard(ctx: ExtensionCommandContext): Promise<void> {
 			items: [
 				{
 					id: "model",
-					icon: "◆",
+					icon: icon("model"),
 					label: "选择模型",
 					hotkey: "1",
 					value: shortModel(config.currentModel.model),
@@ -577,7 +773,7 @@ async function currentModelWizard(ctx: ExtensionCommandContext): Promise<void> {
 				},
 				{
 					id: "thinking",
-					icon: "◈",
+					icon: icon("routes"),
 					label: "thinking level",
 					hotkey: "2",
 					value: level,
@@ -586,7 +782,7 @@ async function currentModelWizard(ctx: ExtensionCommandContext): Promise<void> {
 				},
 				{
 					id: "sync",
-					icon: "▸",
+					icon: icon("resume"),
 					label: "把配置里的模型应用到本次会话",
 					hotkey: "3",
 					hint: "会话模型与配置不一致时用",
@@ -619,11 +815,18 @@ async function currentModelWizard(ctx: ExtensionCommandContext): Promise<void> {
 	}
 }
 
-const ROLE_META: Record<RoleName, { icon: string; hint: string }> = {
-	scout: { icon: "◇", hint: "只读侦察：定位代码与事实" },
-	planner: { icon: "◈", hint: "只读规划：产出实施步骤" },
-	worker: { icon: "◆", hint: "读写执行：改代码、跑命令" },
-	reviewer: { icon: "◉", hint: "只读复审：找缺陷与回归" },
+/**
+ * 存图标名而不是字形。
+ *
+ * 这是模块级常量，只在加载时求值一次；写字形的话，切换图标集之后这里还是旧字形，
+ * 于是同一个角色在角色页和总览页显示成两个样子。名字在渲染时才过 icon()，
+ * 才能跟着 setIconSet 变。
+ */
+const ROLE_META: Record<RoleName, { icon: IconName; hint: string }> = {
+	scout: { icon: "scout", hint: "只读侦察：定位代码与事实" },
+	planner: { icon: "planner", hint: "只读规划：产出实施步骤" },
+	worker: { icon: "worker", hint: "读写执行：改代码、跑命令" },
+	reviewer: { icon: "reviewer", hint: "只读复审：找缺陷与回归" },
 };
 
 export async function roleMenu(ctx: ExtensionCommandContext): Promise<void> {
@@ -634,7 +837,7 @@ export async function roleMenu(ctx: ExtensionCommandContext): Promise<void> {
 			const custom = rc !== undefined && (rc.model || rc.thinking || rc.tools);
 			return {
 				id: role,
-				icon: ROLE_META[role].icon,
+				icon: icon(ROLE_META[role].icon),
 				label: role,
 				hotkey: String(i + 1),
 				value: shortModel(resolveRoleModel(config, role)),
@@ -649,7 +852,7 @@ export async function roleMenu(ctx: ExtensionCommandContext): Promise<void> {
 				ROLE_NAMES.map((role) =>
 					kv(
 						theme,
-						ROLE_META[role].icon,
+						icon(ROLE_META[role].icon),
 						role,
 						theme.fg("dim", ROLE_META[role].hint),
 					),
@@ -676,17 +879,17 @@ async function providersMenu(ctx: ExtensionCommandContext): Promise<void> {
 				providers.slice(0, 3).map((p) =>
 					kv(
 						theme,
-						p.authenticated ? "◉" : "○",
+						icon(p.authenticated ? "radioOn" : "radioOff"),
 						p.id,
 						`${theme.fg(p.authenticated ? "success" : "muted", p.authenticated ? "已认证" : "未认证")}${sep(theme)}${theme.fg("dim", `${p.modelCount} 个模型`)}`,
 					),
 				),
 			items: [
-				{ id: "status", icon: "▣", label: "查看认证状态", hotkey: "1", value: `${providers.length} 个厂商` },
-				{ id: "add", icon: "+", label: "添加自定义厂商", hotkey: "2", hint: "OpenAI 兼容 / Anthropic 兼容端点" },
+				{ id: "status", icon: icon("status"), label: "查看认证状态", hotkey: "1", value: `${providers.length} 个厂商` },
+				{ id: "add", icon: icon("add"), label: "添加自定义厂商", hotkey: "2", hint: "OpenAI 兼容 / Anthropic 兼容端点" },
 				{
 					id: "remove",
-					icon: "-",
+					icon: icon("remove"),
 					label: "移除自定义厂商",
 					hotkey: "3",
 					value: `${config.providers.length} 个`,
@@ -740,15 +943,15 @@ async function subagentsMenu(ctx: ExtensionCommandContext): Promise<boolean> {
 			title: "子代理",
 			titleRight: `并行 ${limits.maxConcurrency} · 上限 ${limits.maxParallelTasks} 个任务`,
 			status: (theme) => [
-				kv(theme, "▶", "single", theme.fg("dim", "一个角色跑一个任务")),
-				kv(theme, "▷", "parallel", theme.fg("dim", "多个任务同时跑，受并行数限制")),
-				kv(theme, "▸", "chain", theme.fg("dim", "串行，用 {previous} 引用上一步结果")),
+				kv(theme, icon("play"), "single", theme.fg("dim", "一个角色跑一个任务")),
+				kv(theme, icon("orchestration"), "parallel", theme.fg("dim", "多个任务同时跑，受并行数限制")),
+				kv(theme, icon("right"), "chain", theme.fg("dim", "串行，用 {previous} 引用上一步结果")),
 			],
 			items: [
-				{ id: "launch", icon: "▶", label: "启动子代理", hotkey: "1", hint: "single / parallel / chain 向导" },
+				{ id: "launch", icon: icon("play"), label: "启动子代理", hotkey: "1", hint: "single / parallel / chain 向导" },
 				{
 					id: "concurrency",
-					icon: "◈",
+					icon: icon("orchestration"),
 					label: "最大并行数",
 					hotkey: "2",
 					value: String(limits.maxConcurrency),
@@ -756,7 +959,7 @@ async function subagentsMenu(ctx: ExtensionCommandContext): Promise<boolean> {
 				},
 				{
 					id: "tasks",
-					icon: "◇",
+					icon: icon("steps"),
 					label: "最大任务数",
 					hotkey: "3",
 					value: String(limits.maxParallelTasks),
@@ -805,7 +1008,7 @@ async function goalMenu(ctx: ExtensionCommandContext): Promise<void> {
 		const items: MenuItem[] = [
 			{
 				id: "start",
-				icon: "▶",
+				icon: icon("play"),
 				label: "开始新目标",
 				hotkey: "1",
 				value: running ? "将覆盖当前目标" : "",
@@ -813,24 +1016,24 @@ async function goalMenu(ctx: ExtensionCommandContext): Promise<void> {
 			},
 			{
 				id: "start-auto",
-				icon: "▶",
+				icon: icon("autopilot"),
 				label: "开始新目标（autopilot）",
 				hotkey: "2",
 				hint: `每轮结束自动继续，上限 ${config.goal.maxAutoTurns} 轮`,
 			},
-			{ id: "pause", icon: "▮", label: "暂停", hotkey: "3", tone: running ? undefined : "muted" },
+			{ id: "pause", icon: icon("pause"), label: "暂停", hotkey: "3", tone: running ? undefined : "muted" },
 			{
 				id: "resume",
-				icon: "▷",
+				icon: icon("resume"),
 				label: "恢复",
 				hotkey: "4",
 				tone: goal.status === "paused" || goal.status === "blocked" ? undefined : "muted",
 			},
-			{ id: "complete", icon: "✓", label: "标记完成", hotkey: "5", hint: "附一句完成摘要" },
-			{ id: "clear", icon: "×", label: "清除目标", hotkey: "6", tone: "muted" },
+			{ id: "complete", icon: icon("check"), label: "标记完成", hotkey: "5", hint: "附一句完成摘要" },
+			{ id: "clear", icon: icon("clear"), label: "清除目标", hotkey: "6", tone: "muted" },
 			{
 				id: "turns",
-				icon: "◈",
+				icon: icon("autopilot"),
 				label: "autopilot 轮次上限",
 				hotkey: "7",
 				value: String(config.goal.maxAutoTurns),
@@ -855,25 +1058,25 @@ function goalStatusLines(theme: Theme, goal: ReturnType<typeof getGoalState>): s
 	const lines = [
 		kv(
 			theme,
-			"◉",
+			icon("goal"),
 			"目标",
 			goal.text ? theme.fg("text", goal.text) : theme.fg("dim", "(未设置)"),
 		),
 		kv(
 			theme,
-			"◈",
+			icon("status"),
 			"状态",
 			`${theme.fg(goalTone(goal.status), goal.status)}${sep(theme)}${theme.fg("dim", goal.strategy)}${sep(theme)}${gauge(theme, goal.maxTurns > 0 ? goal.turnsUsed / goal.maxTurns : 0, 10)} ${theme.fg("muted", `${goal.turnsUsed}/${goal.maxTurns}`)}`,
 		),
 	];
 	if (goal.progress) {
-		lines.push(kv(theme, "▸", "进度", theme.fg("muted", goal.progress)));
+		lines.push(kv(theme, icon("right"), "进度", theme.fg("muted", goal.progress)));
 	}
 	if (goal.blockedReason) {
-		lines.push(kv(theme, "×", "阻塞", theme.fg("error", goal.blockedReason)));
+		lines.push(kv(theme, icon("cross"), "阻塞", theme.fg("error", goal.blockedReason)));
 	}
 	if (goal.summary) {
-		lines.push(kv(theme, "✓", "摘要", theme.fg("success", goal.summary)));
+		lines.push(kv(theme, icon("check"), "摘要", theme.fg("success", goal.summary)));
 	}
 	return lines;
 }
@@ -935,7 +1138,7 @@ async function planMenu(ctx: ExtensionCommandContext): Promise<void> {
 			status: (theme) => [
 				kv(
 					theme,
-					"▦",
+					icon("planMode"),
 					"当前",
 					executing
 						? theme.fg("accent", "执行中：按步骤推进，完成一步打 [DONE:n]")
@@ -943,12 +1146,12 @@ async function planMenu(ctx: ExtensionCommandContext): Promise<void> {
 							? theme.fg("warning", "规划中：edit/write 已禁用，bash 仅白名单")
 							: theme.fg("dim", "未启用：完整权限"),
 				),
-				kv(theme, "▸", "快捷键", theme.fg("muted", "Ctrl+Alt+P 直接开关；/todos 查看步骤")),
+				kv(theme, icon("right"), "快捷键", theme.fg("muted", "Ctrl+Alt+P 直接开关；/todos 查看步骤")),
 			],
 			items: [
 				{
 					id: "on",
-					icon: "▶",
+					icon: icon("play"),
 					label: "进入 Plan 模式",
 					hotkey: "1",
 					tone: active ? "muted" : undefined,
@@ -956,16 +1159,16 @@ async function planMenu(ctx: ExtensionCommandContext): Promise<void> {
 				},
 				{
 					id: "off",
-					icon: "▮",
+					icon: icon("pause"),
 					label: "退出 Plan 模式",
 					hotkey: "2",
 					tone: active ? undefined : "muted",
 					hint: "恢复完整工具权限",
 				},
-				{ id: "status", icon: "▣", label: "查看计划状态", hotkey: "3" },
+				{ id: "status", icon: icon("status"), label: "查看计划状态", hotkey: "3" },
 				{
 					id: "execute",
-					icon: "▷",
+					icon: icon("play"),
 					label: "开始执行计划",
 					hotkey: "4",
 					hint: "逐步执行并跟踪进度",
@@ -998,13 +1201,13 @@ async function footerMenu(ctx: ExtensionCommandContext): Promise<void> {
 			status: (theme) => [
 				kv(
 					theme,
-					"▤",
+					icon("footer"),
 					"内容",
 					theme.fg("muted", "模型+thinking · 目录 · Git · 上下文 · token · 费用 · 时长"),
 				),
 				kv(
 					theme,
-					"◈",
+					icon("status"),
 					"状态",
 					`${theme.fg(on ? "success" : "dim", on ? "已启用" : "已关闭")}${sep(theme)}${theme.fg(tps ? "success" : "dim", `TPS ${tps ? "on" : "off"}`)}`,
 				),
@@ -1012,14 +1215,14 @@ async function footerMenu(ctx: ExtensionCommandContext): Promise<void> {
 			items: [
 				{
 					id: "toggle",
-					icon: "◐",
+					icon: on ? icon("toggleOn") : icon("toggleOff"),
 					label: on ? "关闭 cometix footer" : "启用 cometix footer",
 					hotkey: "1",
 					value: on ? "on" : "off",
 				},
 				{
 					id: "tps",
-					icon: "◈",
+					icon: tps ? icon("toggleOn") : icon("toggleOff"),
 					label: tps ? "隐藏 TPS" : "显示 TPS",
 					hotkey: "2",
 					value: tps ? "on" : "off",
@@ -1063,20 +1266,20 @@ async function advisorMenu(ctx: ExtensionCommandContext): Promise<void> {
 			status: (theme) => [
 				kv(
 					theme,
-					"▲",
+					icon("advisor"),
 					"作用",
 					theme.fg("muted", "每轮结束后由第二个模型只读复查，产出 旁注/疑虑/阻塞 卡片"),
 				),
 				kv(
 					theme,
-					"◆",
+					icon("model"),
 					"模型",
 					theme.fg("text", resolveRoute(config, "advisor").model) +
 						theme.fg("dim", "  ← 路由 advisor"),
 				),
 				kv(
 					theme,
-					"◈",
+					icon("status"),
 					"状态",
 					`${theme.fg(on ? "success" : "dim", on ? "已启用" : "已关闭")}${sep(theme)}${theme.fg("dim", `阈值 ${config.advisor.minSeverity} · 本会话已出 ${advisorController.shown()} 条 / 上限 ${config.advisor.maxPerSession}`)}`,
 				),
@@ -1085,7 +1288,7 @@ async function advisorMenu(ctx: ExtensionCommandContext): Promise<void> {
 				{
 					id: "toggle",
 					group: "开关",
-					icon: "◐",
+					icon: on ? icon("toggleOn") : icon("toggleOff"),
 					label: on ? "关闭旁审" : "启用旁审",
 					hotkey: "1",
 					value: on ? "on" : "off",
@@ -1094,7 +1297,7 @@ async function advisorMenu(ctx: ExtensionCommandContext): Promise<void> {
 				...ADVISOR_SEVERITIES.map((s, i) => ({
 					id: `sev-${s}`,
 					group: "最低展示等级",
-					icon: config.advisor.minSeverity === s ? "◉" : "○",
+					icon: config.advisor.minSeverity === s ? icon("radioOn") : icon("radioOff"),
 					label: s,
 					hotkey: String(i + 2),
 					tone: (s === "blocker" ? "error" : s === "concern" ? "warning" : "dim") as ThemeColor,
@@ -1135,7 +1338,7 @@ async function keywordsMenu(ctx: ExtensionCommandContext): Promise<void> {
 			status: (theme) => [
 				kv(
 					theme,
-					"✦",
+					icon("keywords"),
 					"规则",
 					theme.fg("muted", "只在散文里生效：代码块、行内代码、标签、路径与标识符中的同名词不触发"),
 				),
@@ -1144,7 +1347,7 @@ async function keywordsMenu(ctx: ExtensionCommandContext): Promise<void> {
 				{
 					id: "toggle",
 					group: "开关",
-					icon: "◐",
+					icon: on ? icon("toggleOn") : icon("toggleOff"),
 					label: on ? "关闭关键词" : "启用关键词",
 					hotkey: "1",
 					value: on ? "on" : "off",
@@ -1152,7 +1355,7 @@ async function keywordsMenu(ctx: ExtensionCommandContext): Promise<void> {
 				...MAGIC_KEYWORDS.map((kw, i) => ({
 					id: `kw-${kw}`,
 					group: "关键词",
-					icon: "✦",
+					icon: icon("keywords"),
 					label: kw,
 					hotkey: String(i + 2),
 					hint: KEYWORD_HINTS[kw],
@@ -1198,19 +1401,19 @@ async function orchestrationMenu(ctx: ExtensionCommandContext): Promise<void> {
 			status: (theme) => [
 				kv(
 					theme,
-					"▨",
+					icon("orchestration"),
 					"作用",
 					theme.fg("muted", "看出一条消息其实是好几件事时，让它先派 scout 分头调查、汇总后再派 worker"),
 				),
 				kv(
 					theme,
-					"◈",
+					icon("steps"),
 					"打分",
 					theme.fg("dim", "待办条数 / 先后顺序 / 覆盖面词 / 点名文件数 / 篇幅，只数散文，代码块不算"),
 				),
 				kv(
 					theme,
-					"◐",
+					icon("status"),
 					"当前",
 					`${theme.fg(mode === "off" ? "dim" : "success", ORCHESTRATION_MODE_HINTS[mode])}${sep(theme)}${theme.fg("dim", `阈值 ${minComplexity} 分`)}`,
 				),
@@ -1219,7 +1422,7 @@ async function orchestrationMenu(ctx: ExtensionCommandContext): Promise<void> {
 				...ORCHESTRATION_MODES.map((m, i) => ({
 					id: `mode-${m}`,
 					group: "触发方式",
-					icon: mode === m ? "◉" : "○",
+					icon: mode === m ? icon("radioOn") : icon("radioOff"),
 					label: m,
 					hotkey: String(i + 1),
 					tone: (m === "off" ? "dim" : m === "auto" ? "warning" : undefined) as ThemeColor | undefined,
@@ -1228,7 +1431,7 @@ async function orchestrationMenu(ctx: ExtensionCommandContext): Promise<void> {
 				{
 					id: "threshold",
 					group: "阈值",
-					icon: "▤",
+					icon: icon("steps"),
 					label: "最低复杂度",
 					hotkey: "4",
 					value: `${minComplexity} 分`,
@@ -1283,11 +1486,11 @@ async function promptsMenu(ctx: ExtensionCommandContext): Promise<boolean> {
 			title: "工作流提示词",
 			titleRight: "package.json 的 pi.prompts 注册为斜杠命令",
 			status: (theme) => [
-				kv(theme, "▪", "用法", theme.fg("muted", "选中后填入编辑器，补上任务描述再回车")),
+				kv(theme, icon("prompts"), "用法", theme.fg("muted", "选中后填入编辑器，补上任务描述再回车")),
 			],
 			items: WORKFLOW_PROMPTS.map((p, i) => ({
 				id: p.id,
-				icon: "▪",
+				icon: icon("prompts"),
 				label: `/${p.id}`,
 				hotkey: String(i + 1),
 				hint: p.hint,
@@ -1299,8 +1502,8 @@ async function promptsMenu(ctx: ExtensionCommandContext): Promise<boolean> {
 		const action = await runMenu(ctx, {
 			title: `/${picked}`,
 			items: [
-				{ id: "insert", icon: "▸", label: "填入编辑器", hotkey: "1", hint: `/${picked} ` },
-				{ id: "view", icon: "▣", label: "查看提示词内容", hotkey: "2" },
+				{ id: "insert", icon: icon("insert"), label: "填入编辑器", hotkey: "1", hint: `/${picked} ` },
+				{ id: "view", icon: icon("view"), label: "查看提示词内容", hotkey: "2" },
 			],
 		});
 		if (action === "insert") {
@@ -1327,11 +1530,11 @@ async function configMenu(ctx: ExtensionCommandContext): Promise<void> {
 			title: "配置管理",
 			titleRight: trusted ? "项目已信任" : "项目未信任（仅读用户配置）",
 			status: (theme) => [
-				kv(theme, "▣", "项目", theme.fg("text", paths.projectPath)),
-				kv(theme, "○", "用户", theme.fg("muted", paths.userPath)),
+				kv(theme, icon("config"), "项目", theme.fg("text", paths.projectPath)),
+				kv(theme, icon("config"), "用户", theme.fg("muted", paths.userPath)),
 				kv(
 					theme,
-					"◈",
+					icon("key"),
 					"信任",
 					trusted
 						? theme.fg("success", "项目配置生效，写入项目文件")
@@ -1339,9 +1542,9 @@ async function configMenu(ctx: ExtensionCommandContext): Promise<void> {
 				),
 			],
 			items: [
-				{ id: "validate", icon: "✓", label: "校验配置", hotkey: "1", hint: "重新解析并列出警告" },
-				{ id: "reload", icon: "▷", label: "重新加载配置", hotkey: "2", hint: "手改 json 后同步进来" },
-				{ id: "view", icon: "▣", label: "查看当前配置", hotkey: "3", hint: "已合并用户配置与项目配置" },
+				{ id: "validate", icon: icon("check"), label: "校验配置", hotkey: "1", hint: "重新解析并列出警告" },
+				{ id: "reload", icon: icon("reset"), label: "重新加载配置", hotkey: "2", hint: "手改 json 后同步进来" },
+				{ id: "view", icon: icon("view"), label: "查看当前配置", hotkey: "3", hint: "已合并用户配置与项目配置" },
 				{
 					id: "generate",
 					icon: "+",
@@ -1446,7 +1649,7 @@ async function statusPage(ctx: ExtensionCommandContext): Promise<void> {
 		...ROLE_NAMES.map((role) =>
 			kv(
 				theme,
-				ROLE_META[role].icon,
+				icon(ROLE_META[role].icon),
 				role,
 				`${theme.fg("text", resolveRoleModel(config, role))}${dim("  ·  ")}${theme.fg(thinkingTone(resolveRoleThinking(config, role)), resolveRoleThinking(config, role))}${dim("  ·  ")}${theme.fg("muted", resolveRoleTools(config, role).join(" "))}`,
 			),
@@ -1461,26 +1664,26 @@ async function statusPage(ctx: ExtensionCommandContext): Promise<void> {
 					: dim(resolved.route === null ? "  ← 主模型" : `  ← ${resolved.route}`);
 			return kv(
 				theme,
-				config.routes[route]?.model !== undefined ? "◉" : "○",
+				config.routes[route]?.model !== undefined ? icon("radioOn") : icon("radioOff"),
 				route,
 				`${theme.fg("text", shortModel(resolved.model))}${from}${dim("  ·  ")}${theme.fg(thinkingTone(resolved.thinking), resolved.thinking)}`,
 			);
 		}),
 		"",
 		theme.fg("accent", "运行"),
-		kv(theme, "◉", "Goal", `${theme.fg(goalTone(goal.status), goal.status)}${dim("  ·  ")}${theme.fg("muted", goal.text || "(未设置)")}`),
-		kv(theme, "▦", "Plan", theme.fg(planLabel() === "off" ? "dim" : "warning", planLabel())),
-		kv(theme, "▶", "子代理", theme.fg("muted", `并行 ${config.subagents.maxConcurrency} · 任务上限 ${config.subagents.maxParallelTasks}`)),
-		kv(theme, "▤", "Footer", theme.fg("muted", `${footerController.isEnabled?.() ? "on" : "off"} · TPS ${footerController.isTpsEnabled?.() ? "on" : "off"}`)),
+		kv(theme, icon("goal"), "Goal", `${theme.fg(goalTone(goal.status), goal.status)}${dim("  ·  ")}${theme.fg("muted", goal.text || "(未设置)")}`),
+		kv(theme, icon("planMode"), "Plan", theme.fg(planLabel() === "off" ? "dim" : "warning", planLabel())),
+		kv(theme, icon("subagents"), "子代理", theme.fg("muted", `并行 ${config.subagents.maxConcurrency} · 任务上限 ${config.subagents.maxParallelTasks}`)),
+		kv(theme, icon("footer"), "Footer", theme.fg("muted", `${footerController.isEnabled?.() ? "on" : "off"} · TPS ${footerController.isTpsEnabled?.() ? "on" : "off"}`)),
 		kv(
 			theme,
-			"▲",
+			icon("advisor"),
 			"Advisor",
 			`${theme.fg(advisorController.isEnabled(config) ? "success" : "dim", advisorController.isEnabled(config) ? "on" : "off")}${dim("  ·  ")}${theme.fg("muted", `阈值 ${config.advisor.minSeverity} · 已出 ${advisorController.shown()}/${config.advisor.maxPerSession}`)}`,
 		),
 		kv(
 			theme,
-			"✦",
+			icon("keywords"),
 			"关键词",
 			`${theme.fg(config.keywords.enabled ? "success" : "dim", config.keywords.enabled ? "on" : "off")}${dim("  ·  ")}${theme.fg("muted", MAGIC_KEYWORDS.join(" · "))}`,
 		),
@@ -1489,15 +1692,15 @@ async function statusPage(ctx: ExtensionCommandContext): Promise<void> {
 		...providers.map((p) =>
 			kv(
 				theme,
-				p.authenticated ? "◉" : "○",
+				p.authenticated ? icon("radioOn") : icon("radioOff"),
 				p.id,
 				`${theme.fg(p.authenticated ? "success" : "muted", p.authenticated ? "已认证" : "未认证")}${dim("  ·  ")}${theme.fg("muted", `${p.modelCount} 个模型`)}${p.custom ? dim("  ·  自定义") : ""}`,
 			),
 		),
 		"",
 		theme.fg("accent", "路径"),
-		kv(theme, "▣", "项目", theme.fg("muted", paths.projectPath)),
-		kv(theme, "○", "用户", theme.fg("muted", paths.userPath)),
+		kv(theme, icon("config"), "项目", theme.fg("muted", paths.projectPath)),
+		kv(theme, icon("config"), "用户", theme.fg("muted", paths.userPath)),
 	];
 	await runInfoPage(ctx, {
 		title: "状态总览",

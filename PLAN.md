@@ -66,8 +66,8 @@
 主界面以卡片式菜单呈现：顶部三行实时状态（模型 / 运行态 / 上下文占用），
 主体按「外观 · 模型 · 工作流 · 系统」分组，每项右侧显示当前值；支持数字/字母
 热键直达、`/` 模糊搜索与光标记忆，主题与模型选择器在移动光标时即时预览。
-所有行按显示宽度对齐（CJK/emoji 不撑破边框），窄于 56 列时边框退化，
-非 TUI 模式回退为纯文本输出。
+所有行按显示宽度对齐（CJK 不撑破布局，emoji 直接禁用），卡片边框可配
+`round`/`square`/`none`，非 TUI 模式回退为纯文本输出。
 
 ## 4. 技术架构
 
@@ -205,6 +205,8 @@ pi-extends/
   "$schema": "./pi-extends.schema.json",
   "version": 1,
   "theme": "pi-carbon",
+  "icons": "lucide",
+  "border": "round",
   "currentModel": {
     "model": "anthropic/claude-sonnet-4-5",
     "thinking": "high"
@@ -518,13 +520,36 @@ Plan 与 Goal 同时使用时：
 - 加载链起点由 `defaultConfig()` 改为 `emptyBase()`：`roles`/`routes` 未配置就是
   未配置，删除操作不会被默认值填回来；`/config generate` 仍产出完整模板。
 
-完成标准：卡片每行显示宽度精确等于卡片宽度且不含边框字符；切栏前后高度与列宽不变；
+完成标准：卡片每行显示宽度精确等于卡片宽度；切栏前后高度与列宽不变；
 overlay 不裁掉底部提示行；普通消息不会触发自动分工。
 排版改动用 `tools/preview-cockpit.ts` 拿真实主题渲染肉眼复核 —— 对齐能断言，好不好看不能。
 
+### 阶段七：Lucide 图标与可配边框 ✅
+
+- 界面图标统一走 Lucide 官方字体（`lucide-static` 的 `lucide.ttf`，私有区码位），
+  四套字形分级降级：`lucide` → `nerd` → `unicode` → `ascii`。图标集是模块级状态
+  （`icons.ts` 的 `active`），在 `store.ts` 加载配置时同步一次，不逐个传参。
+  `PI_EXTENDS_ICONS` 环境变量优先于配置文件，字体没装时能当场救场。
+- emoji 全面清零：emoji 占两列，会顶歪按一列排版的图标列。`audit-glyphs.mjs`
+  扫源码禁 emoji 与「有 emoji 呈现形态」的双形态字符，`icons.ts` 之外不许出现私有区字符。
+  footer 原来写死 `ICON_MODE = "emoji"`，一并改走 `icon()`。
+- 码位不能靠眼睛校：写错一个私有区码位，本机字体缺字形时看起来和「装错字体」一模一样。
+  `fetch-icon-tables.mjs` 拉上游码位表，`verify-icons.mjs` 比对 62 图标 × 4 字形 = 248 个字形。
+- 卡片边框回归为可配项 `border`：`round`（默认）/ `square` / `none`。
+  阶段六「去掉边框」的理由是省宽度，但真正费宽度的是标题独占一行 —— 把标题嵌进
+  上边框的鱼骨里（`╭─ 标题 ──── 右上角 ─╮`），开框只比不开多上下两行。
+  卡片**外**宽三种样式下完全一致，开框吃的是内容可用宽度，不会把卡片撑出终端；
+  窄卡片截断标题而不是抹掉。边框色用 `dim`（3.85–8.63:1）而不是 `borderMuted`，
+  同阶段六那条禁令。
+- `borderMuted` 的源码级禁令覆盖到了新代码：`renderTopRail` 初版用它上色，被
+  既有的 `ui-kit-contrast.test.ts` 当场拦下。
+
+完成标准：`verify-icons.mjs` 与 `audit-glyphs.mjs` 全绿；三种边框样式下卡片每行
+显示宽度都精确等于卡片宽度；点击坐标随边框偏移而不整体错列。
+
 ## 14. 测试计划
 
-### 单元测试（已落地 126 条，`npm test`）
+### 单元测试（已落地 144 条，`npm test`）
 
 - 默认配置和深度合并（`config.test.ts`）。
 - 无效 JSON、错误字段和旧版本配置（`config.test.ts`）。
@@ -545,6 +570,10 @@ overlay 不裁掉底部提示行；普通消息不会触发自动分工。
 - 切栏后卡片高度与列宽不变、快捷键跨栏生效（`ui-kit-tabs.test.ts`）。
 - coding plan 目录的 provider id 与环境变量名对得上上游（`plans.test.ts`）。
 - 配置作用域与项目/用户级覆盖（`store-scope.test.ts`）。
+- 图标表四套字形齐全、按实测宽度全为一列、界面不含 emoji（`icons.test.ts`）。
+- 三种边框样式下每行显示宽度都等于卡片宽度、开框只多两行、窄卡片截断标题、
+  点击坐标随边框偏移（`ui-kit-render.test.ts`）。
+- `border` 字段校验与未知值降级（`config.test.ts`）。
 
 ### 集成测试（已通过真实 Pi TUI 冒烟）
 

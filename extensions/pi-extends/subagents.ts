@@ -6,6 +6,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import type { PiExtendsConfig, RoleName } from "./config.ts";
+import { icon } from "./icons.ts";
 import { getPiInvocation, runPiChild } from "./pi-child.ts";
 import { isPlanModeActive } from "./plan-mode.ts";
 import { getAPI } from "./runtime.ts";
@@ -578,9 +579,9 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 			if (details.mode === "single" && details.results.length === 1) {
 				const r = details.results[0];
 				const isError = isFailedResult(r);
-				const icon = isError ? "✗" : "✓";
+				const mark = isError ? icon("cross") : icon("check");
 				const items = getDisplayItems(r.messages);
-				let text = `${icon} ${r.role}`;
+				let text = `${mark} ${r.role}`;
 				if (isError && r.stopReason) text += ` [${r.stopReason}]`;
 				if (isError && r.errorMessage) text += `\nError: ${r.errorMessage}`;
 				else if (items.length === 0) text += `\n(no output)`;
@@ -596,10 +597,11 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 			const successCount = details.results.filter(
 				(r) => r.exitCode !== -1 && !isFailedResult(r),
 			).length;
-			const icon = running > 0 ? "⏳" : successCount === details.results.length ? "✓" : "◐";
-			let text = `${icon} ${details.mode} ${successCount}/${details.results.length} tasks`;
+			const mark =
+				running > 0 ? icon("pending") : successCount === details.results.length ? icon("check") : icon("warn");
+			let text = `${mark} ${details.mode} ${successCount}/${details.results.length} tasks`;
 			for (const r of details.results) {
-				const rIcon = r.exitCode === -1 ? "⏳" : isFailedResult(r) ? "✗" : "✓";
+				const rIcon = r.exitCode === -1 ? icon("pending") : isFailedResult(r) ? icon("cross") : icon("check");
 				text += `\n${rIcon} ${r.role}`;
 				const items = getDisplayItems(r.messages);
 				if (items.length === 0) text += ` (${r.exitCode === -1 ? "running..." : "no output"})`;
