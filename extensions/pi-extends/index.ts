@@ -8,6 +8,7 @@ import { openCockpit } from "./cockpit.ts";
 import registerFooter from "./footer.ts";
 import goalModeExtension from "./goal-mode.ts";
 import { registerKeywords } from "./keywords.ts";
+import { registerOrchestration } from "./orchestration.ts";
 import planModeExtension from "./plan-mode.ts";
 import { reapplyCustomProviders } from "./providers.ts";
 import { setAPI } from "./runtime.ts";
@@ -99,6 +100,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	registerFooter(pi);
 	registerAdvisor(pi);
 	registerKeywords(pi);
+	// 注册在 keywords 之后：两者都改写同一条输入，而自动分工要先看到关键词有没有命中。
+	registerOrchestration(pi);
 
 	pi.registerCommand("cockpit", {
 		description: "打开 Pi Extends 主控制台",

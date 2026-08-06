@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -7,6 +6,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import type { PiExtendsConfig, RoleName } from "./config.ts";
+import { getPiInvocation, runPiChild } from "./pi-child.ts";
 import { isPlanModeActive } from "./plan-mode.ts";
 import { getAPI } from "./runtime.ts";
 import { getConfig } from "./store.ts";
@@ -20,6 +20,8 @@ import {
 } from "./subagent-parse.ts";
 
 const COLLAPSED_ITEM_COUNT = 10;
+/** 单个子代理的墙钟上限。挂住的子进程不该让工具调用无限期悬停。 */
+const SUBAGENT_TIMEOUT_MS = 600_000;
 
 export const ROLE_SYSTEM_PROMPTS: Record<RoleName, string> = {
 	scout: `你是 Scout：只读的快速侦察代理。
@@ -130,20 +132,6 @@ async function writePromptToTempFile(role: string, prompt: string): Promise<{ di
 	return { dir: tmpDir, filePath };
 }
 
-export function getPiInvocation(args: string[]): { command: string; args: string[] } {
-	const currentScript = process.argv[1];
-	const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
-	if (currentScript && !isBunVirtualScript && fs.existsSync(currentScript)) {
-		return { command: process.execPath, args: [currentScript, ...args] };
-	}
-	const execName = path.basename(process.execPath).toLowerCase();
-	const isGenericRuntime = /^(node|bun)(\.exe)?$/.test(execName);
-	if (!isGenericRuntime) {
-		return { command: process.execPath, args };
-	}
-	return { command: "pi", args };
-}
-
 function roleSystemPrompt(
 	config: PiExtendsConfig,
 	role: RoleName,
@@ -229,91 +217,58 @@ async function runSingleRole(
 		tmpPromptDir = tmp.dir;
 		tmpPromptPath = tmp.filePath;
 		const args = buildChildArgs(config, roleName, task, tmpPromptPath);
-		let wasAborted = false;
 
-		const exitCode = await new Promise<number>((resolve) => {
-			const invocation = getPiInvocation(args);
-			const proc = spawn(invocation.command, invocation.args, {
-				cwd: ctx.cwd,
-				shell: false,
-				stdio: ["ignore", "pipe", "pipe"],
-			});
-			let buffer = "";
-
-			const processLine = (line: string) => {
-				const event = parseJsonlLine(line);
-				if (!event) return;
-				if (isMessageEndEvent(event)) {
-					const msg = event.message;
-					currentResult.messages.push(msg);
-					if (msg.role === "assistant") {
-						currentResult.usage.turns++;
-						const usage = msg.usage;
-						if (usage) {
-							currentResult.usage.input += usage.input || 0;
-							currentResult.usage.output += usage.output || 0;
-							currentResult.usage.cacheRead += usage.cacheRead || 0;
-							currentResult.usage.cacheWrite += usage.cacheWrite || 0;
-							currentResult.usage.cost += usage.cost?.total || 0;
-							currentResult.usage.contextTokens = usage.totalTokens || 0;
-						}
-						if (!currentResult.model && msg.model) currentResult.model = msg.model;
-						if (msg.stopReason) currentResult.stopReason = msg.stopReason;
-						if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
+		const processLine = (line: string) => {
+			const event = parseJsonlLine(line);
+			if (!event) return;
+			if (isMessageEndEvent(event)) {
+				const msg = event.message;
+				currentResult.messages.push(msg);
+				if (msg.role === "assistant") {
+					currentResult.usage.turns++;
+					const usage = msg.usage;
+					if (usage) {
+						currentResult.usage.input += usage.input || 0;
+						currentResult.usage.output += usage.output || 0;
+						currentResult.usage.cacheRead += usage.cacheRead || 0;
+						currentResult.usage.cacheWrite += usage.cacheWrite || 0;
+						currentResult.usage.cost += usage.cost?.total || 0;
+						currentResult.usage.contextTokens = usage.totalTokens || 0;
 					}
-					emitUpdate();
+					if (!currentResult.model && msg.model) currentResult.model = msg.model;
+					if (msg.stopReason) currentResult.stopReason = msg.stopReason;
+					if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
 				}
-				if (isToolResultEndEvent(event)) {
-					currentResult.messages.push(event.message);
-					emitUpdate();
-				}
-			};
-
-			proc.stdout.on("data", (data) => {
-				buffer += data.toString();
-				const lines = buffer.split("\n");
-				buffer = lines.pop() || "";
-				for (const line of lines) processLine(line);
-			});
-			proc.stderr.on("data", (data) => {
-				currentResult.stderr += data.toString();
-			});
-			proc.on("close", (code) => {
-				if (buffer.trim()) processLine(buffer);
-				resolve(code ?? 0);
-			});
-			proc.on("error", () => {
-				resolve(1);
-			});
-			if (signal) {
-				const killProc = () => {
-					wasAborted = true;
-					proc.kill("SIGTERM");
-					setTimeout(() => {
-						if (!proc.killed) proc.kill("SIGKILL");
-					}, 5000);
-				};
-				if (signal.aborted) killProc();
-				else signal.addEventListener("abort", killProc, { once: true });
+				emitUpdate();
 			}
+			if (isToolResultEndEvent(event)) {
+				currentResult.messages.push(event.message);
+				emitUpdate();
+			}
+		};
+
+		const child = await runPiChild({
+			args,
+			cwd: ctx.cwd,
+			signal,
+			timeoutMs: SUBAGENT_TIMEOUT_MS,
+			onLine: processLine,
 		});
 
-		currentResult.exitCode = exitCode;
-		if (wasAborted) throw new Error("Subagent was aborted");
+		currentResult.exitCode = child.code;
+		if (child.stderr) {
+			currentResult.stderr += child.stderr;
+		}
+		if (child.timedOut) {
+			currentResult.stopReason = "error";
+			currentResult.errorMessage = `子代理超时（${Math.round(SUBAGENT_TIMEOUT_MS / 1000)}s）后被终止。`;
+		}
+		if (child.aborted) throw new Error("Subagent was aborted");
 		return currentResult;
 	} finally {
-		if (tmpPromptPath)
-			try {
-				fs.unlinkSync(tmpPromptPath);
-			} catch {
-				/* ignore */
-			}
-		if (tmpPromptDir)
-			try {
-				fs.rmdirSync(tmpPromptDir);
-			} catch {
-				/* ignore */
-			}
+		if (tmpPromptDir) {
+			await fs.promises.rm(tmpPromptDir, { recursive: true, force: true }).catch(() => {});
+		}
 	}
 }
 

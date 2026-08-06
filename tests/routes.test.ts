@@ -81,8 +81,9 @@ test("sanitizeConfig 丢弃非法路由、非法模型与自指回退", () => {
 			nosuchroute: { model: "a/b" },
 		},
 	});
-	assert.equal(config.routes.smol?.model, defaultConfig().routes.smol?.model);
-	assert.equal(config.routes.smol?.thinking, defaultConfig().routes.smol?.thinking);
+	// 基线为空，非法值被丢弃后该字段就是「未配置」，而不是回落到某个默认模型。
+	assert.equal(config.routes.smol?.model, undefined);
+	assert.equal(config.routes.smol?.thinking, undefined);
 	assert.deepEqual(config.routes.smol?.fallback, ["slow"]);
 	assert.ok(!("nosuchroute" in config.routes));
 	assert.ok(warnings.some((w) => w.includes("未知路由")));

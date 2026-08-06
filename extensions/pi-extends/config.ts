@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 export const CONFIG_VERSION = 1;
@@ -140,6 +141,28 @@ export interface KeywordsConfig {
 	enabled: boolean;
 }
 
+/**
+ * 编排建议模式。
+ * - `off`：不做任何提示。
+ * - `suggest`：识别到适合拆分的任务时给出一条建议卡片，用户按键确认才注入指令。
+ * - `auto`：直接把编排指令追加到这一轮输入，不再询问。
+ */
+export const ORCHESTRATION_MODES = ["off", "suggest", "auto"] as const;
+export type OrchestrationMode = (typeof ORCHESTRATION_MODES)[number];
+
+export function isValidOrchestrationMode(v: unknown): v is OrchestrationMode {
+	return (
+		typeof v === "string" && (ORCHESTRATION_MODES as readonly string[]).includes(v)
+	);
+}
+
+/** 自动分工：识别可并行/可流水线的任务并给出建议或直接编排。 */
+export interface OrchestrationConfig {
+	mode: OrchestrationMode;
+	/** 复杂度评分达到该阈值才提示，避免小任务被打断。 */
+	minComplexity: number;
+}
+
 export interface CurrentModelConfig {
 	model: string;
 	thinking: ThinkingLevel;
@@ -167,12 +190,25 @@ export interface PiExtendsConfig {
 	goal: GoalConfig;
 	advisor: AdvisorConfig;
 	keywords: KeywordsConfig;
+	orchestration: OrchestrationConfig;
 }
 
 export interface ConfigLoadResult {
 	config: PiExtendsConfig;
 	warnings: string[];
 }
+
+/** 配置作用域：用户级（~/.pi/agent）或项目级（<cwd>/.pi）。 */
+export type ConfigScope = "user" | "project";
+
+/**
+ * 合并模式。
+ *
+ * - `inherit`：未出现的字段从 base 继承。用于加载时叠加「默认 → 用户 → 项目」。
+ * - `exact`：只保留 raw 里真实存在的字段，不从 base 回填。用于落盘 ——
+ *   否则 `delete config.routes.smol.model` 会被默认值复活，清除操作永远不生效。
+ */
+export type MergeMode = "inherit" | "exact";
 
 const TOOL_SET = new Set<string>(BUILTIN_TOOLS);
 
@@ -312,6 +348,53 @@ export function defaultConfig(): PiExtendsConfig {
 		},
 		keywords: {
 			enabled: true,
+		},
+		orchestration: {
+			mode: "suggest",
+			minComplexity: 3,
+		},
+	};
+}
+
+/**
+ * 加载链的起点：标量有兜底值，但 roles/routes/providers 全空。
+ *
+ * 这里刻意不用 `defaultConfig()`。若加载链从默认值开始，用户「清除 routes.smol 的模型」
+ * 写盘后，下次加载又会被默认值填回来 —— 删除操作在语义上无法表达。
+ * roles 与 routes 未配置时的行为由读取侧兜底（resolveRoute / roleToolDefault），
+ * 因此这里留空是安全的，且「未配置」终于真的等于未配置。
+ * `defaultConfig()` 现在只用于 `/config generate` 生成模板。
+ */
+export function emptyBase(): PiExtendsConfig {
+	return {
+		version: CONFIG_VERSION,
+		theme: "pi-carbon",
+		currentModel: {
+			model: "anthropic/claude-sonnet-4-5",
+			thinking: "high",
+		},
+		roles: {},
+		routes: {},
+		providers: [],
+		subagents: {
+			maxParallelTasks: 8,
+			maxConcurrency: 4,
+		},
+		goal: {
+			defaultMode: "focused",
+			maxAutoTurns: 5,
+		},
+		advisor: {
+			enabled: false,
+			minSeverity: "concern",
+			maxPerSession: 20,
+		},
+		keywords: {
+			enabled: true,
+		},
+		orchestration: {
+			mode: "suggest",
+			minComplexity: 3,
 		},
 	};
 }
@@ -596,11 +679,44 @@ function sanitizeKeywords(raw: unknown, base: KeywordsConfig, warnings: string[]
 	};
 }
 
+function sanitizeOrchestration(
+	raw: unknown,
+	base: OrchestrationConfig,
+	warnings: string[],
+): OrchestrationConfig {
+	if (raw === undefined) {
+		return base;
+	}
+	if (!isPlainRecord(raw)) {
+		warnings.push("orchestration: 期望对象，忽略");
+		return base;
+	}
+	const mode = asOptionalString(raw.mode, warnings, "orchestration.mode");
+	let resolved = base.mode;
+	if (mode !== undefined) {
+		if (isValidOrchestrationMode(mode)) {
+			resolved = mode;
+		} else {
+			warnings.push(`orchestration.mode: 未知模式 "${mode}"，忽略`);
+		}
+	}
+	return {
+		mode: resolved,
+		minComplexity:
+			rawToPositiveInt(raw.minComplexity, warnings, "orchestration.minComplexity") ??
+			base.minComplexity,
+	};
+}
+
 /**
  * 将原始配置整理为完整配置。未出现的字段从 `base` 继承，因此可以链式处理
  * 用户级配置（base=默认值）和项目级配置（base=用户级结果）实现逐字段覆盖。
  */
-export function sanitizeConfig(raw: unknown, base: PiExtendsConfig = defaultConfig()): ConfigLoadResult {
+export function sanitizeConfig(
+	raw: unknown,
+	base: PiExtendsConfig = emptyBase(),
+	mode: MergeMode = "inherit",
+): ConfigLoadResult {
 	const warnings: string[] = [];
 	if (raw === undefined || raw === null) {
 		return { config: base, warnings: ["配置为空，使用默认值"] };
@@ -608,6 +724,8 @@ export function sanitizeConfig(raw: unknown, base: PiExtendsConfig = defaultConf
 	if (!isPlainRecord(raw)) {
 		return { config: base, warnings: ["配置不是 JSON 对象，使用默认值"] };
 	}
+	// exact 模式下 roles/routes 不从 base 继承，这样 delete 才能落盘生效。
+	const exact = mode === "exact";
 
 	const version = raw.version;
 	if (typeof version === "number" && version !== CONFIG_VERSION) {
@@ -647,14 +765,14 @@ export function sanitizeConfig(raw: unknown, base: PiExtendsConfig = defaultConf
 		}
 	}
 
-	let roles: Partial<Record<RoleName, RoleConfig>> = { ...base.roles };
+	const roles: Partial<Record<RoleName, RoleConfig>> = exact ? {} : { ...base.roles };
 	if (raw.roles !== undefined) {
 		if (isPlainRecord(raw.roles)) {
 			for (const role of ROLE_NAMES) {
 				if (raw.roles[role] !== undefined) {
 					const value = sanitizeRole(raw.roles[role], warnings, role);
 					if (value !== undefined) {
-						roles[role] = { ...base.roles[role], ...value };
+						roles[role] = exact ? value : { ...base.roles[role], ...value };
 					}
 				}
 			}
@@ -668,14 +786,14 @@ export function sanitizeConfig(raw: unknown, base: PiExtendsConfig = defaultConf
 		}
 	}
 
-	const routes: Partial<Record<RouteName, RouteConfig>> = { ...base.routes };
+	const routes: Partial<Record<RouteName, RouteConfig>> = exact ? {} : { ...base.routes };
 	if (raw.routes !== undefined) {
 		if (isPlainRecord(raw.routes)) {
 			for (const route of ROUTE_NAMES) {
 				if (raw.routes[route] !== undefined) {
 					const value = sanitizeRoute(raw.routes[route], warnings, route);
 					if (value !== undefined) {
-						routes[route] = { ...base.routes[route], ...value };
+						routes[route] = exact ? value : { ...base.routes[route], ...value };
 					}
 				}
 			}
@@ -709,6 +827,7 @@ export function sanitizeConfig(raw: unknown, base: PiExtendsConfig = defaultConf
 	const goal = sanitizeGoal(raw.goal, base.goal, warnings);
 	const advisor = sanitizeAdvisor(raw.advisor, base.advisor, warnings);
 	const keywords = sanitizeKeywords(raw.keywords, base.keywords, warnings);
+	const orchestration = sanitizeOrchestration(raw.orchestration, base.orchestration, warnings);
 
 	return {
 		config: {
@@ -723,6 +842,7 @@ export function sanitizeConfig(raw: unknown, base: PiExtendsConfig = defaultConf
 			goal,
 			advisor,
 			keywords,
+			orchestration,
 		},
 		warnings,
 	};
@@ -785,16 +905,95 @@ function readJsonFileSync(filePath: string): { raw: unknown; warnings: string[] 
 	}
 }
 
+/**
+ * 递归求出 `next` 相对 `prev` 的变化，删除表示为 `undefined`。
+ *
+ * 为什么需要它：cockpit 的 mutate 拿到的是「合并后」的配置，直接把结果写进用户级
+ * 会把项目级的值一起抄过去（反向泄漏）。所以只把「这次真正改了什么」应用到目标层。
+ * 配置树是纯 JSON（对象 / 数组 / 标量），不需要处理循环引用。
+ */
+export function diffConfig(prev: unknown, next: unknown): unknown {
+	if (Array.isArray(prev) || Array.isArray(next)) {
+		// 数组整体替换：providers / fallback 这类语义上是「一个值」，逐项 diff 没有意义。
+		return JSON.stringify(prev) === JSON.stringify(next) ? undefined : next;
+	}
+	if (isPlainRecord(prev) && isPlainRecord(next)) {
+		const patch: Record<string, unknown> = {};
+		let changed = false;
+		for (const key of new Set([...Object.keys(prev), ...Object.keys(next)])) {
+			if (!(key in next)) {
+				patch[key] = undefined; // 删除
+				changed = true;
+				continue;
+			}
+			if (!(key in prev)) {
+				patch[key] = next[key];
+				changed = true;
+				continue;
+			}
+			const sub = diffConfig(prev[key], next[key]);
+			if (sub !== undefined) {
+				patch[key] = sub;
+				changed = true;
+			}
+		}
+		return changed ? patch : undefined;
+	}
+	return prev === next ? undefined : next;
+}
+
+/**
+ * 把 `diffConfig` 的结果应用到一份原始文档上。`undefined` 表示删除该键。
+ * 返回新对象，不修改入参。
+ */
+export function applyPatch(doc: unknown, patch: unknown): unknown {
+	if (patch === undefined) {
+		return doc;
+	}
+	if (!isPlainRecord(patch)) {
+		return patch;
+	}
+	const base: Record<string, unknown> = isPlainRecord(doc) ? { ...doc } : {};
+	for (const [key, value] of Object.entries(patch)) {
+		if (value === undefined) {
+			delete base[key];
+		} else if (isPlainRecord(value)) {
+			base[key] = applyPatch(base[key], value);
+		} else {
+			base[key] = value;
+		}
+	}
+	return base;
+}
+
+export interface LayeredLoadResult extends ConfigLoadResult {
+	/** 用户级原始文档（未与项目层合并），供写回用户级时作为基线。 */
+	userRaw: unknown;
+	/** 项目级实际参与合并的键，用于提示「你改的值被项目配置覆盖了」。 */
+	projectKeys: string[];
+}
+
+/** 顶层键中项目配置实际提供了哪些，用于覆盖提示。 */
+function topLevelKeys(raw: unknown): string[] {
+	if (!isPlainRecord(raw)) {
+		return [];
+	}
+	return Object.keys(raw).filter((k) => k !== "$schema" && k !== "version");
+}
+
 export function loadConfigFiles(opts: {
 	userPath?: string;
 	projectPath?: string;
-}): ConfigLoadResult {
+}): LayeredLoadResult {
 	const warnings: string[] = [];
-	let base = defaultConfig();
+	let base = emptyBase();
+	let userRaw: unknown;
+	let projectKeys: string[] = [];
 
 	if (opts.userPath && fs.existsSync(opts.userPath)) {
 		const { raw, warnings: w } = readJsonFileSync(opts.userPath);
 		warnings.push(...w);
+		userRaw = raw;
 		const result = sanitizeConfig(raw, base);
 		warnings.push(...result.warnings);
 		base = result.config;
@@ -803,12 +1002,13 @@ export function loadConfigFiles(opts: {
 	if (opts.projectPath && fs.existsSync(opts.projectPath)) {
 		const { raw, warnings: w } = readJsonFileSync(opts.projectPath);
 		warnings.push(...w);
+		projectKeys = topLevelKeys(raw);
 		const result = sanitizeConfig(raw, base);
 		warnings.push(...result.warnings);
 		base = result.config;
 	}
 
-	return { config: base, warnings };
+	return { config: base, warnings, userRaw, projectKeys };
 }
 
 /**
@@ -822,7 +1022,14 @@ export async function atomicWriteJson(filePath: string, data: unknown): Promise<
 		`.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`,
 	);
 	const text = JSON.stringify(data, null, 2) + "\n";
-	await fs.promises.writeFile(tmpPath, text, { encoding: "utf8", mode: 0o600 });
+	// 先 fsync 再 rename：rename 本身是原子的，但没 fsync 时掉电可能留下空文件。
+	const handle = await fs.promises.open(tmpPath, "w", 0o600);
+	try {
+		await handle.writeFile(text, "utf8");
+		await handle.sync();
+	} finally {
+		await handle.close();
+	}
 	try {
 		await fs.promises.rename(tmpPath, filePath);
 	} catch (err) {
@@ -835,7 +1042,9 @@ export function resolveConfigPaths(cwd: string): {
 	userPath: string;
 	projectPath: string;
 } {
-	const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+	// HOME 缺失时退到 os.homedir()，再不行才用 cwd —— 否则 path.join("", ...) 会得到
+	// 相对路径 ".pi/agent/pi-extends.json"，把用户级配置写进当前目录。
+	const home = process.env.HOME || process.env.USERPROFILE || os.homedir() || cwd;
 	return {
 		userPath: path.join(home, ".pi", "agent", "pi-extends.json"),
 		projectPath: path.join(cwd, ".pi", "pi-extends.json"),

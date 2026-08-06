@@ -56,5 +56,9 @@
   },
   "keywords": {
     "enabled": true
+  },
+  "orchestration": {
+    "mode": "suggest",
+    "minComplexity": 3
   }
 }

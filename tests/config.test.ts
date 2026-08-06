@@ -16,6 +16,9 @@ import {
 	isValidToolName,
 	loadConfigFiles,
 	sanitizeConfig,
+	applyPatch,
+	diffConfig,
+	emptyBase,
 } from "../extensions/pi-extends/config.ts";
 
 function tmpDir(): string {
@@ -31,10 +34,71 @@ test("默认配置可直接使用", () => {
 	assert.equal(config.subagents.maxConcurrency, 4);
 });
 
-test("空配置回退默认值并给出警告", () => {
+test("空配置回退到空基线并给出警告", () => {
 	const result = sanitizeConfig(undefined);
-	assert.deepEqual(result.config, defaultConfig());
+	// 基线不再是 defaultConfig()：加载链从空开始，否则用户的删除操作会被默认值复活。
+	assert.deepEqual(result.config, emptyBase());
+	assert.deepEqual(result.config.roles, {});
+	assert.deepEqual(result.config.routes, {});
 	assert.ok(result.warnings.length > 0);
+});
+
+test("exact 模式让删除操作真正落盘，不被默认值复活", () => {
+	// 模拟 routes.ts 的 clear-model：从一份「已配置」的文档里删掉 model。
+	const configured = sanitizeConfig({
+		version: 1,
+		routes: { smol: { model: "google/gemini-2.5-flash", thinking: "low" } },
+		roles: { scout: { model: "a/b", tools: ["read", "grep"] } },
+	}).config;
+
+	delete configured.routes.smol!.model;
+	delete configured.roles.scout!.tools;
+
+	const written = sanitizeConfig(configured, emptyBase(), "exact").config;
+	assert.equal(written.routes.smol?.model, undefined, "清除后不应再出现 model");
+	assert.equal(written.routes.smol?.thinking, "low", "同级其他字段要保留");
+	assert.equal(written.roles.scout?.tools, undefined, "清除后不应再出现 tools");
+	assert.equal(written.roles.scout?.model, "a/b");
+});
+
+test("inherit 模式仍然逐层继承，用于加载链", () => {
+	const user = sanitizeConfig({ version: 1, theme: "pi-sakura" }).config;
+	const merged = sanitizeConfig({ version: 1, currentModel: { model: "x/y" } }, user).config;
+	assert.equal(merged.theme, "pi-sakura", "未出现的字段继承上一层");
+	assert.equal(merged.currentModel.model, "x/y");
+});
+
+test("diffConfig 只报告真实变化，删除表示为 undefined", () => {
+	const prev = { theme: "a", currentModel: { model: "m", thinking: "high" }, routes: { smol: { model: "s" } } };
+	const next = { theme: "b", currentModel: { model: "m", thinking: "high" }, routes: { smol: {} } };
+	const patch = diffConfig(prev, next) as Record<string, any>;
+	assert.equal(patch.theme, "b");
+	assert.equal("currentModel" in patch, false, "未变化的子树不应出现");
+	assert.ok("model" in patch.routes.smol, "删除的键要出现");
+	assert.equal(patch.routes.smol.model, undefined);
+});
+
+test("diffConfig 无变化时返回 undefined", () => {
+	assert.equal(diffConfig({ a: 1, b: { c: 2 } }, { a: 1, b: { c: 2 } }), undefined);
+});
+
+test("applyPatch 把改动应用到目标层，不带入其他层的值", () => {
+	// 用户级只有主模型；项目级设了主题，合并后 theme=pi-paper。
+	const userRaw = { version: 1, currentModel: { model: "openai/gpt-5.2" } };
+	const mergedPrev = { version: 1, theme: "pi-paper", currentModel: { model: "openai/gpt-5.2" } };
+	// 用户在 cockpit 里把主题改成 pi-sakura。
+	const mergedNext = { ...mergedPrev, theme: "pi-sakura" };
+
+	const patch = diffConfig(mergedPrev, mergedNext);
+	const written = applyPatch(userRaw, patch) as Record<string, any>;
+
+	assert.equal(written.theme, "pi-sakura", "改动要写进用户层");
+	assert.equal(written.currentModel.model, "openai/gpt-5.2", "用户层原有值保留");
+	assert.equal(
+		JSON.stringify(written).includes("pi-paper"),
+		false,
+		"项目层的值不应被抄进用户层",
+	);
 });
 
 test("损坏 JSON 文件产生可理解警告并回退", () => {

@@ -179,6 +179,23 @@ pi-extends/
 - `ultrathink` 把当轮 thinking 提到 max，本轮结束后自动恢复原值。
 - `orchestrate` 改写为派并行子代理分工；`workflowz` 改写为 scout → planner → worker → reviewer 全流水线。
 
+## 4.4 自动分工
+
+关键词的前提是用户记得写。真会一次丢五件事进来的人，正忙着描述这五件事。
+所以额外给一条「提醒」路径：给每条交互输入打一个可解释的复杂度分，超过阈值就
+建议拆成并行子代理。拆分指令复用 `keywords.ts` 里 `orchestrate` 那一份，不另写 prompt。
+
+- 信号：待办条数（`1.` `-` `第三步`）、先后顺序词、覆盖面词（所有/每个/重构/迁移）、
+  点名文件数、散文篇幅。每个信号都能对着原文指出来，弹窗里直接把理由列给用户。
+- 只看散文，掩码与关键词共用 `maskNonProse`：贴一段 diff 进来不会因为里面的 `-`
+  和文件名被判成五件事。版本号（`gpt-4.1`、`3.5`）不算待办项。
+- 三种模式：`off` 不看；`suggest`（默认）弹一句问，答「否」则本会话不再问；
+  `auto` 直接注入并发一条通知。阈值 `minComplexity` 默认 3 分。
+- 不触发的场合：非交互输入（rpc / extension）、流式插话（steer）、用户自己
+  已经写了魔法关键词、没有 UI 的模式。
+
+首要风险是误触而不是漏判，所以 `tests/orchestration.test.ts` 里防误触的用例更多。
+
 ## 5. 配置格式
 
 项目级配置文件为 `.pi/pi-extends.json`。首版结构如下：
@@ -242,6 +259,10 @@ pi-extends/
   },
   "keywords": {
     "enabled": true
+  },
+  "orchestration": {
+    "mode": "suggest",
+    "minComplexity": 3
   }
 }
 ```
@@ -476,9 +497,23 @@ Plan 与 Goal 同时使用时：
 
 完成标准：`pi install ./` 后可直接运行 `/cockpit`，卸载不遗留项目外文件。
 
+### 阶段六：TUI 打磨、coding plan 目录与自动分工 ✅
+
+- 卡片去掉边框、分组改为顶部 tab 条、接入鼠标（点行/点 tab/滚轮）。
+- 说明文字固定在卡片尾行，消除光标移动带来的整列抖动；选中行底色只铺到内容末尾；
+  未选中的直达键从 `borderMuted` 改为 `dim`（深色终端上约 2.2:1 → 3.7:1）。
+- 新增 coding plan 目录：列出内置厂商对应的订阅套餐、认证方式与环境变量名，
+  认证能力现从 provider 对象读取而不是写死枚举。
+- 新增自动分工（见 4.4），并在 cockpit「工作流」栏给出模式与阈值入口。
+- 加载链起点由 `defaultConfig()` 改为 `emptyBase()`：`roles`/`routes` 未配置就是
+  未配置，删除操作不会被默认值填回来；`/config generate` 仍产出完整模板。
+
+完成标准：卡片每行显示宽度精确等于卡片宽度且不含边框字符；overlay 不裁掉底部提示行；
+普通消息不会触发自动分工。
+
 ## 14. 测试计划
 
-### 单元测试（已落地 63 条，`npm test`）
+### 单元测试（已落地 121 条，`npm test`）
 
 - 默认配置和深度合并（`config.test.ts`）。
 - 无效 JSON、错误字段和旧版本配置（`config.test.ts`）。
@@ -487,9 +522,17 @@ Plan 与 Goal 同时使用时：
 - Advisor 输出解析、过滤与排序（`advisor-parse.test.ts`）。
 - 关键词散文检测与掩码（`keywords.test.ts`）。
 - 卡片布局与宽度对齐（`ui-kit.test.ts`、`ui-kit-render.test.ts`）。
-- Plan 只读命令 allowlist/denylist、计划步骤与 `[DONE:n]` 提取（`plan-utils.test.ts`）。
+- Plan 只读命令 allowlist/denylist、计划步骤与 `[DONE:n]` 提取（`plan-utils.test.ts`、
+  `plan-safety.test.ts`）。
 - Goal 状态转换和最大轮次边界（`goal-mode.test.ts`）。
 - 子代理 JSONL 事件解析与输出截断（`subagent-parse.test.ts`）。
+- 自动分工打分：短消息与普通长段落不到阈值、代码块与版本号不算数、
+  重复词只计一次、有分必有理由（`orchestration.test.ts`）。
+- 卡片 tab 切换、鼠标点击命中与说明行位置固定（`ui-kit-tabs.test.ts`、
+  `ui-kit-render.test.ts`、`mouse.test.ts`、`mouse-lifecycle.test.ts`）。
+- 主题在 selectedBg 上的对比度（`ui-kit-contrast.test.ts`）。
+- coding plan 目录的 provider id 与环境变量名对得上上游（`plans.test.ts`）。
+- 配置作用域与项目/用户级覆盖（`store-scope.test.ts`）。
 
 ### 集成测试（已通过真实 Pi TUI 冒烟）
 

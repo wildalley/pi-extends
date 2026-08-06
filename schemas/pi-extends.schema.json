@@ -58,6 +58,22 @@
         "enabled": { "type": "boolean" }
       }
     },
+    "orchestration": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "自动分工：识别适合拆分的任务并给出建议或直接编排。",
+      "properties": {
+        "mode": {
+          "enum": ["off", "suggest", "auto"],
+          "description": "off 不提示；suggest 给建议卡片、确认后注入；auto 直接注入编排指令。"
+        },
+        "minComplexity": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "复杂度评分达到该阈值才提示，避免小任务被打断。"
+        }
+      }
+    },
     "providers": {
       "type": "array",
       "items": { "$ref": "#/$defs/customProvider" }

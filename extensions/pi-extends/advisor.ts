@@ -20,8 +20,9 @@ import {
 	summarizeNotes,
 	type AdvisorNote,
 } from "./advisor-parse.ts";
-import { getConfig, updateConfig } from "./store.ts";
-import { getPiInvocation } from "./subagents.ts";
+import { editConfig } from "./config-ui.ts";
+import { runPiChild } from "./pi-child.ts";
+import { getConfig } from "./store.ts";
 
 const CUSTOM_TYPE = "pi-extends-advisor";
 const NESTED_ENV = "PI_EXTENDS_ADVISOR_CHILD";
@@ -66,18 +67,26 @@ export async function setAdvisorEnabled(
 	enabled: boolean,
 ): Promise<void> {
 	advisorController.setEnabled(enabled);
-	await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (config) => {
-		config.advisor.enabled = enabled;
-	});
+	await editConfig(
+		ctx,
+		(config) => {
+			config.advisor.enabled = enabled;
+		},
+		{ touched: ["advisor"] },
+	);
 }
 
 export async function setAdvisorSeverity(
 	ctx: ExtensionContext,
 	minSeverity: AdvisorSeverity,
 ): Promise<void> {
-	await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (config) => {
-		config.advisor.minSeverity = minSeverity;
-	});
+	await editConfig(
+		ctx,
+		(config) => {
+			config.advisor.minSeverity = minSeverity;
+		},
+		{ touched: ["advisor"] },
+	);
 }
 
 function textOf(message: AgentMessage | undefined): string {
@@ -113,46 +122,38 @@ export function buildExcerpt(messages: AgentMessage[]): string {
 }
 
 async function runAdvisor(
-	pi: ExtensionAPI,
 	ctx: ExtensionContext,
 	config: PiExtendsConfig,
 	excerpt: string,
+	signal: AbortSignal | undefined,
 ): Promise<AdvisorNote[]> {
 	const route = resolveRoute(config, "advisor");
-	const invocation = getPiInvocation([
-		"-p",
-		"--no-session",
-		"-ne",
-		"--model",
-		route.model,
-		"--thinking",
-		route.thinking,
-		"--tools",
-		READONLY_TOOLS,
-		"--append-system-prompt",
-		SYSTEM_PROMPT,
-		`复查下面这一轮：\n\n${excerpt}`,
-	]);
-	const previous = process.env[NESTED_ENV];
-	process.env[NESTED_ENV] = "1";
-	try {
-		const result = await pi.exec(invocation.command, invocation.args, {
-			cwd: ctx.cwd,
-			timeout: TIMEOUT_MS,
-		});
-		if (result.code !== 0) {
-			return [];
-		}
-		return parseAdvisorOutput(result.stdout);
-	} catch {
+	// 递归防护通过子进程 env 传递，而不是改 process.env —— 后者是进程全局状态，
+	// 并行的子代理会互相覆盖，且 finally 里的恢复会和其他 in-flight 子进程打架。
+	const result = await runPiChild({
+		args: [
+			"-p",
+			"--no-session",
+			"-ne",
+			"--model",
+			route.model,
+			"--thinking",
+			route.thinking,
+			"--tools",
+			READONLY_TOOLS,
+			"--append-system-prompt",
+			SYSTEM_PROMPT,
+			`复查下面这一轮：\n\n${excerpt}`,
+		],
+		cwd: ctx.cwd,
+		signal,
+		timeoutMs: TIMEOUT_MS,
+		env: { [NESTED_ENV]: "1" },
+	});
+	if (result.code !== 0) {
 		return [];
-	} finally {
-		if (previous === undefined) {
-			delete process.env[NESTED_ENV];
-		} else {
-			process.env[NESTED_ENV] = previous;
-		}
 	}
+	return parseAdvisorOutput(result.stdout);
 }
 
 /** 转录区里的旁审卡片：宽度由 TUI 在渲染时给出，所以排版必须延迟到 render。 */
@@ -201,7 +202,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
 		state.running = true;
 		try {
 			const notes = filterNotes(
-				await runAdvisor(pi, ctx, config, excerpt),
+				await runAdvisor(ctx, config, excerpt, undefined),
 				config.advisor.minSeverity,
 			);
 			if (notes.length === 0) {

@@ -18,7 +18,8 @@ import {
 	type ThinkingLevel,
 } from "./config.ts";
 import { THINKING_HINTS, pickModelId, pickThinking, shortModel, thinkingTone } from "./pickers.ts";
-import { getConfig, updateConfig } from "./store.ts";
+import { editConfig } from "./config-ui.ts";
+import { getConfig } from "./store.ts";
 import { kv, runMenu, type MenuItem } from "./ui-kit.ts";
 
 /** 有多少条路由显式配置了模型或 thinking。 */
@@ -129,15 +130,19 @@ async function mutateRoute(
 	route: RouteName,
 	mutate: (rc: RouteConfig) => void,
 ): Promise<void> {
-	await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (config) => {
-		const rc = config.routes[route] ?? {};
-		mutate(rc);
-		if (Object.keys(rc).length === 0) {
-			delete config.routes[route];
-		} else {
-			config.routes[route] = rc;
-		}
-	});
+	await editConfig(
+		ctx,
+		(config) => {
+			const rc = config.routes[route] ?? {};
+			mutate(rc);
+			if (Object.keys(rc).length === 0) {
+				delete config.routes[route];
+			} else {
+				config.routes[route] = rc;
+			}
+		},
+		{ touched: ["routes"] },
+	);
 }
 
 function editRouteStatus(theme: Theme, config: PiExtendsConfig, route: RouteName): string[] {
@@ -279,9 +284,12 @@ async function applyRouteAction(
 		return;
 	}
 	if (action === "reset") {
-		await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (config) => {
-			delete config.routes[route];
-		});
-		ctx.ui.notify(`路由 ${route} 已恢复默认。`, "info");
+		await editConfig(
+			ctx,
+			(config) => {
+				delete config.routes[route];
+			},
+			{ touched: ["routes"], notify: `路由 ${route} 已恢复默认。` },
+		);
 	}
 }

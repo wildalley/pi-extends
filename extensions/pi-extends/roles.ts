@@ -14,7 +14,8 @@ import {
 	shortModel,
 	thinkingTone,
 } from "./pickers.ts";
-import { getConfig, updateConfig } from "./store.ts";
+import { editConfig } from "./config-ui.ts";
+import { getConfig } from "./store.ts";
 import { kv, runMenu, type MenuItem } from "./ui-kit.ts";
 
 export function describeRole(config: PiExtendsConfig, role: RoleName): string {
@@ -58,11 +59,15 @@ async function mutateRole(
 	role: RoleName,
 	mutate: (rc: NonNullable<PiExtendsConfig["roles"][RoleName]>) => void,
 ): Promise<void> {
-	await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (config) => {
-		const rc = config.roles[role] ?? {};
-		mutate(rc);
-		config.roles[role] = rc;
-	});
+	await editConfig(
+		ctx,
+		(config) => {
+			const rc = config.roles[role] ?? {};
+			mutate(rc);
+			config.roles[role] = rc;
+		},
+		{ touched: ["roles"] },
+	);
 }
 
 function roleStatus(theme: Theme, config: PiExtendsConfig, role: RoleName): string[] {
@@ -259,9 +264,13 @@ async function applyRoleReset(
 		return;
 	}
 	if (action === "reset") {
-		await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (config) => {
-			delete config.roles[role];
-		});
+		await editConfig(
+			ctx,
+			(config) => {
+				delete config.roles[role];
+			},
+			{ touched: ["roles"] },
+		);
 		ctx.ui.notify(`角色 ${role} 已恢复默认。`, "info");
 	}
 }

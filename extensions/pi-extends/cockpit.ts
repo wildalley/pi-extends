@@ -12,11 +12,13 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionCommandContext, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { ROLE_NAMES, ROUTE_NAMES, resolveRoute, type PiExtendsConfig, type RoleName } from "./config.ts";
 import { advisorController, setAdvisorEnabled, setAdvisorSeverity } from "./advisor.ts";
-import { ADVISOR_SEVERITIES, type AdvisorSeverity } from "./config.ts";
+import { ADVISOR_SEVERITIES, ORCHESTRATION_MODES, type AdvisorSeverity, type OrchestrationMode } from "./config.ts";
+import { editConfig } from "./config-ui.ts";
 import { footerController } from "./footer.ts";
 import { getGoalState, runGoalCommand } from "./goal-mode.ts";
 import { KEYWORD_HINTS, MAGIC_KEYWORDS } from "./keywords.ts";
 import { isPlanExecuting, isPlanModeActive, planController } from "./plan-mode.ts";
+import { collectPlanStatus, openPlansPage } from "./plans.ts";
 import {
 	THINKING_HINTS,
 	findModelById,
@@ -42,7 +44,7 @@ import {
 } from "./roles.ts";
 import { customizedRouteCount, describeRoutes, routesWizard } from "./routes.ts";
 import { getAPI } from "./runtime.ts";
-import { getConfig, reload, updateConfig } from "./store.ts";
+import { getConfig, reload } from "./store.ts";
 import { runSubagentLauncher } from "./subagents.ts";
 import {
 	badge,
@@ -150,6 +152,7 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 	const footerOn = footerController.isEnabled?.() ?? false;
 	const tpsOn = footerController.isTpsEnabled?.() ?? false;
 	const advisorOn = advisorController.isEnabled(config);
+	const readyPlans = collectPlanStatus(ctx).filter((p) => p.authenticated).length;
 	return [
 		{
 			id: "theme",
@@ -198,13 +201,24 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 			hint: "按用途分模型：smol · slow · plan · vision …",
 		},
 		{
+			id: "plans",
+			group: "模型",
+			icon: "◉",
+			label: "Coding Plan 与 API",
+			hotkey: "5",
+			value: readyPlans === 0 ? "未开通" : `${readyPlans} 家已开通`,
+			tone: readyPlans === 0 ? "warning" : undefined,
+			hint: "Claude · ChatGPT · Kimi · GLM · OpenCode · Qwen …",
+			keywords: "login auth claude chatgpt kimi glm zai qwen copilot 认证 订阅",
+		},
+		{
 			id: "providers",
 			group: "模型",
 			icon: "◈",
-			label: "厂商与认证",
-			hotkey: "5",
+			label: "自定义厂商",
+			hotkey: "p",
 			value: `${authedProviders}/${providers.length} 已认证`,
-			hint: `自定义 ${config.providers.length} 个`,
+			hint: `自定义 ${config.providers.length} 个 · OpenAI / Anthropic 兼容端点`,
 		},
 		{
 			id: "subagents",
@@ -264,6 +278,21 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 			hint: MAGIC_KEYWORDS.join(" · "),
 		},
 		{
+			id: "orchestration",
+			group: "工作流",
+			icon: "▨",
+			label: "自动分工",
+			hotkey: "d",
+			value: config.orchestration.mode,
+			tone: config.orchestration.mode === "off" ? "muted" : undefined,
+			// 值列已经写着模式名了，说明文字就留给「它凭什么触发」——阈值是唯一需要调的旋钮。
+			hint:
+				config.orchestration.mode === "off"
+					? "一条消息里有好几件事时提醒拆成并行子代理"
+					: `一条消息 ≥ ${config.orchestration.minComplexity} 分就${config.orchestration.mode === "auto" ? "直接" : "问一句再"}拆成并行子代理`,
+			keywords: "orchestration 分工 拆分 并行 子代理 复杂度",
+		},
+		{
 			id: "status",
 			group: "系统",
 			icon: "▣",
@@ -278,6 +307,17 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 			label: "配置管理",
 			hotkey: "c",
 			hint: ".pi/pi-extends.json · 校验 / 重载 / 生成",
+		},
+		{
+			// pi 自己的 /settings 归 pi core 管，扩展 API 既读不到也写不了，
+			// 只能把命令填进输入框帮用户跳过去。详见 dispatch 里的说明。
+			id: "pi-settings",
+			group: "系统",
+			icon: "⚙",
+			label: "pi 原生设置",
+			hotkey: "o",
+			hint: "跳转 /settings · pi 自带的 34 项开关，不由本扩展管理",
+			keywords: "settings 设置 原生",
 		},
 	];
 }
@@ -295,8 +335,13 @@ export async function openCockpit(ctx: ExtensionCommandContext): Promise<void> {
 			titleRight: `${config.theme} · v${config.version}`,
 			status: (theme) => statusLines(ctx, theme),
 			items: cockpitItems(ctx, config),
+			tabs: true,
+			mouse: true,
 			initialId: lastCockpitItem,
-			reserved: 14,
+			// overlay 的高度是硬上限，超出的行会被静默丢掉（最先丢的就是底部提示行）。
+			// 卡片固定占 12 行（标题 + 3 行状态 + 空行 + tab 条 + 空行 + 翻页 + 说明 + 提示），
+			// 这里留 15 是给它一点余量，别正好卡在边界上。
+			reserved: 15,
 		});
 		if (picked === undefined) {
 			return;
@@ -333,6 +378,11 @@ async function dispatch(ctx: ExtensionCommandContext, id: string): Promise<boole
 		case "keywords":
 			await keywordsMenu(ctx);
 			return true;
+		case "orchestration":
+			await orchestrationMenu(ctx);
+			return true;
+		case "plans":
+			return await openPlansPage(ctx);
 		case "providers":
 			await providersMenu(ctx);
 			return true;
@@ -352,6 +402,14 @@ async function dispatch(ctx: ExtensionCommandContext, id: string): Promise<boole
 		case "config":
 			await configMenu(ctx);
 			return true;
+		case "pi-settings":
+			// 不能把 /settings 并进来：那 34 项配置存在 ~/.pi/agent/settings.json，
+			// pi 启动时读进内存、没有文件监听，扩展 API 也没有读写它的入口。
+			// 从外面改文件是「最后写的赢」，pi 退出时会用内存里的值覆盖掉。
+			// 所以这里只做跳转，不做镜像。
+			ctx.ui.setEditorText("/settings");
+			ctx.ui.notify("已填入 /settings，回车打开 pi 原生设置。", "info");
+			return false;
 		default:
 			return true;
 	}
@@ -366,10 +424,13 @@ export async function applyTheme(
 		ctx.ui.notify(`切换主题失败: ${result.error ?? "未知错误"}`, "error");
 		return false;
 	}
-	await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (config) => {
-		config.theme = name;
-	});
-	ctx.ui.notify(`主题已切换为 ${name}。`, "info");
+	await editConfig(
+		ctx,
+		(config) => {
+			config.theme = name;
+		},
+		{ touched: ["theme"], notify: `主题已切换为 ${name}。` },
+	);
 	return true;
 }
 
@@ -479,10 +540,13 @@ async function applyCurrentModel(ctx: ExtensionCommandContext, id: string): Prom
 	} else {
 		ctx.ui.notify(`模型 ${id} 不在注册表中，仅写入配置。`, "warning");
 	}
-	await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (config) => {
-		config.currentModel.model = id;
-	});
-	ctx.ui.notify(`主模型已设为 ${id}。`, "info");
+	await editConfig(
+		ctx,
+		(config) => {
+			config.currentModel.model = id;
+		},
+		{ touched: ["currentModel"], notify: `主模型已设为 ${id}。` },
+	);
 }
 
 async function currentModelWizard(ctx: ExtensionCommandContext): Promise<void> {
@@ -532,10 +596,13 @@ async function currentModelWizard(ctx: ExtensionCommandContext): Promise<void> {
 			const lvl = await pickThinking(ctx, "thinking level", level);
 			if (lvl !== undefined && lvl !== "__inherit") {
 				getAPI().setThinkingLevel(lvl);
-				await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (c) => {
-					c.currentModel.thinking = lvl;
-				});
-				ctx.ui.notify(`thinking 已设为 ${lvl}。`, "info");
+				await editConfig(
+					ctx,
+					(c) => {
+						c.currentModel.thinking = lvl;
+					},
+					{ touched: ["currentModel"], notify: `thinking 已设为 ${lvl}。` },
+				);
 			}
 		} else if (picked === "sync") {
 			await applyCurrentModel(ctx, config.currentModel.model);
@@ -698,18 +765,24 @@ async function subagentsMenu(ctx: ExtensionCommandContext): Promise<boolean> {
 		if (picked === "concurrency") {
 			const n = await askPositiveInt(ctx, "最大并行数", "同时运行的子代理数量", limits.maxConcurrency, 16);
 			if (n !== undefined) {
-				await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (c) => {
-					c.subagents.maxConcurrency = n;
-				});
-				ctx.ui.notify(`最大并行数已设为 ${n}。`, "info");
+				await editConfig(
+					ctx,
+					(c) => {
+						c.subagents.maxConcurrency = n;
+					},
+					{ touched: ["subagents"], notify: `最大并行数已设为 ${n}。` },
+				);
 			}
 		} else if (picked === "tasks") {
 			const n = await askPositiveInt(ctx, "最大任务数", "一次允许的任务条数", limits.maxParallelTasks, 32);
 			if (n !== undefined) {
-				await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (c) => {
-					c.subagents.maxParallelTasks = n;
-				});
-				ctx.ui.notify(`最大任务数已设为 ${n}。`, "info");
+				await editConfig(
+					ctx,
+					(c) => {
+						c.subagents.maxParallelTasks = n;
+					},
+					{ touched: ["subagents"], notify: `最大任务数已设为 ${n}。` },
+				);
 			}
 		}
 	}
@@ -828,10 +901,13 @@ async function runGoalAction(ctx: ExtensionCommandContext, action: string): Prom
 			50,
 		);
 		if (n !== undefined) {
-			await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (c) => {
-				c.goal.maxAutoTurns = n;
-			});
-			ctx.ui.notify(`autopilot 轮次上限已设为 ${n}。`, "info");
+			await editConfig(
+				ctx,
+				(c) => {
+					c.goal.maxAutoTurns = n;
+				},
+				{ touched: ["goal"], notify: `autopilot 轮次上限已设为 ${n}。` },
+			);
 		}
 		return;
 	}
@@ -1080,10 +1156,105 @@ async function keywordsMenu(ctx: ExtensionCommandContext): Promise<void> {
 			return;
 		}
 		if (picked === "toggle") {
-			await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (cfg) => {
-				cfg.keywords.enabled = !on;
-			});
-			ctx.ui.notify(`魔法关键词 ${!on ? "on" : "off"}。`, "info");
+			await editConfig(
+				ctx,
+				(cfg) => {
+					cfg.keywords.enabled = !on;
+				},
+				{ touched: ["keywords"], notify: `魔法关键词 ${!on ? "on" : "off"}。` },
+			);
+		}
+	}
+}
+
+/** 三种模式的一句话解释，菜单和状态区共用，免得两边写得不一样。 */
+const ORCHESTRATION_MODE_HINTS: Record<OrchestrationMode, string> = {
+	off: "不看不问，只有你自己写 orchestrate 才拆",
+	suggest: "先弹一句问你，答「否」则本会话不再问",
+	auto: "直接追加 orchestrate 指令，只发一条通知",
+};
+
+/**
+ * 自动分工：模式 + 阈值。
+ *
+ * 阈值单独列一项而不是塞进模式说明里 —— 会来关掉这个功能的人，一半其实只是嫌它太敏感。
+ */
+async function orchestrationMenu(ctx: ExtensionCommandContext): Promise<void> {
+	while (true) {
+		const config = getConfig(ctx.cwd, ctx.isProjectTrusted());
+		const { mode, minComplexity } = config.orchestration;
+		const picked = await runMenu(ctx, {
+			title: "自动分工",
+			titleRight: mode,
+			status: (theme) => [
+				kv(
+					theme,
+					"▨",
+					"作用",
+					theme.fg("muted", "看出一条消息其实是好几件事时，让它先派 scout 分头调查、汇总后再派 worker"),
+				),
+				kv(
+					theme,
+					"◈",
+					"打分",
+					theme.fg("dim", "待办条数 / 先后顺序 / 覆盖面词 / 点名文件数 / 篇幅，只数散文，代码块不算"),
+				),
+				kv(
+					theme,
+					"◐",
+					"当前",
+					`${theme.fg(mode === "off" ? "dim" : "success", ORCHESTRATION_MODE_HINTS[mode])}${theme.fg("borderMuted", "  ·  ")}${theme.fg("dim", `阈值 ${minComplexity} 分`)}`,
+				),
+			],
+			items: [
+				...ORCHESTRATION_MODES.map((m, i) => ({
+					id: `mode-${m}`,
+					group: "触发方式",
+					icon: mode === m ? "◉" : "○",
+					label: m,
+					hotkey: String(i + 1),
+					tone: (m === "off" ? "dim" : m === "auto" ? "warning" : undefined) as ThemeColor | undefined,
+					hint: ORCHESTRATION_MODE_HINTS[m],
+				})),
+				{
+					id: "threshold",
+					group: "阈值",
+					icon: "▤",
+					label: "最低复杂度",
+					hotkey: "4",
+					value: `${minComplexity} 分`,
+					tone: mode === "off" ? ("muted" as ThemeColor) : undefined,
+					// 具体数字来自 orchestration.ts 的权重表：列 5 条待办自己就值 3 分。
+					hint: "调高更难触发。3 分约等于「列了三条待办」或「覆盖面 + 多文件」",
+				},
+			],
+			reserved: 16,
+		});
+		if (picked === undefined) {
+			return;
+		}
+		if (picked.startsWith("mode-")) {
+			const next = picked.slice(5) as OrchestrationMode;
+			await editConfig(
+				ctx,
+				(cfg) => {
+					cfg.orchestration.mode = next;
+				},
+				{ touched: ["orchestration"], notify: `自动分工已设为 ${next}。` },
+			);
+			continue;
+		}
+		if (picked === "threshold") {
+			const value = await askPositiveInt(ctx, "自动分工阈值", "最低复杂度分数", minComplexity, 8);
+			if (value !== undefined) {
+				await editConfig(
+					ctx,
+					(cfg) => {
+						cfg.orchestration.minComplexity = value;
+					},
+					{ touched: ["orchestration"], notify: `自动分工阈值已设为 ${value} 分。` },
+				);
+			}
 		}
 	}
 }

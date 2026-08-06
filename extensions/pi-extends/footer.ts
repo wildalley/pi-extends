@@ -97,6 +97,62 @@ function formatDuration(durationMs: number): string {
 	return `${hours}h ${minutes}m`;
 }
 
+/**
+ * Token / 费用累计。
+ *
+ * 原来每次 render 都遍历整个 session 的全部 entry 重算一遍。而 render 在任务期间
+ * 每秒至少一次，长会话下是每秒一次 O(entries) 扫描。这些量是单调累加的，
+ * 在 message_end 里增量累计即可；只在 session_start / 恢复会话时全量扫一次。
+ */
+class UsageTotals {
+	input = 0;
+	output = 0;
+	cacheRead = 0;
+	cacheWrite = 0;
+	cost = 0;
+	lastCacheHit: number | undefined;
+
+	reset(): void {
+		this.input = 0;
+		this.output = 0;
+		this.cacheRead = 0;
+		this.cacheWrite = 0;
+		this.cost = 0;
+		this.lastCacheHit = undefined;
+	}
+
+	add(usage: {
+		input?: number;
+		output?: number;
+		cacheRead?: number;
+		cacheWrite?: number;
+		cost?: { total?: number };
+	}): void {
+		const cr = usage.cacheRead ?? 0;
+		const cw = usage.cacheWrite ?? 0;
+		this.input += usage.input ?? 0;
+		this.output += usage.output ?? 0;
+		this.cacheRead += cr;
+		this.cacheWrite += cw;
+		this.cost += usage.cost?.total ?? 0;
+		const prompt = (usage.input ?? 0) + cr + cw;
+		if (prompt > 0) {
+			this.lastCacheHit = (cr / prompt) * 100;
+		}
+	}
+
+	/** 恢复既有会话时用：全量扫一次，之后交给增量累计。 */
+	seedFrom(entries: readonly unknown[]): void {
+		this.reset();
+		for (const e of entries) {
+			const entry = e as { type?: string; message?: { role?: string; usage?: unknown } };
+			if (entry?.type === "message" && entry.message?.role === "assistant" && entry.message.usage) {
+				this.add(entry.message.usage as Parameters<UsageTotals["add"]>[0]);
+			}
+		}
+	}
+}
+
 class TpsTracker {
 	private firstOutputAt: number | undefined;
 
@@ -132,12 +188,12 @@ export const footerController: Partial<FooterController> = {};
 export default function registerFooter(pi: ExtensionAPI): void {
 	let userEnabled = true;
 	let tpsEnabled = DEFAULT_SHOW_TPS;
-	let timer: ReturnType<typeof setInterval> | undefined;
 	let elapsedTimer: ReturnType<typeof setInterval> | undefined;
 	let unsubBranch: (() => void) | undefined;
 	let requestFooterRender: (() => void) | undefined;
 
 	const tpsTracker = new TpsTracker();
+	const totals = new UsageTotals();
 	let latestTps: number | undefined;
 	let taskStartedAt: number | undefined;
 	let latestTaskDurationMs: number | undefined;
@@ -178,8 +234,6 @@ export default function registerFooter(pi: ExtensionAPI): void {
 	}
 
 	function installFooter(ctx: ExtensionContext): void {
-		if (timer) clearInterval(timer);
-		timer = undefined;
 		unsubBranch?.();
 		unsubBranch = undefined;
 
@@ -192,15 +246,14 @@ export default function registerFooter(pi: ExtensionAPI): void {
 				void refreshGit(ctx.cwd, footerData.getGitBranch());
 				tui.requestRender();
 			});
-			timer = setInterval(() => {
-				void refreshGit(ctx.cwd, footerData.getGitBranch()).then(() => tui.requestRender());
-			}, GIT_TTL);
 
+			// 这里刻意不挂定时器。git 状态由 render 里的 TTL 检查按需拉取：
+			// 空闲时没有 render，也就不该有 `git status` 子进程；任务进行中 elapsedTicker
+			// 每秒触发 render，TTL 会把刷新频率自然限制在 GIT_TTL —— 和原来的定时器同频，
+			// 但不会在无人看的时候每 3 秒 fork 一次。
 			return {
 				invalidate() {},
 				dispose() {
-					if (timer) clearInterval(timer);
-					timer = undefined;
 					stopElapsedTicker();
 					unsubBranch?.();
 					unsubBranch = undefined;
@@ -252,34 +305,13 @@ export default function registerFooter(pi: ExtensionAPI): void {
 						pct == null ? "thinkingHigh" : pct > 90 ? "error" : pct > 70 ? "warning" : "thinkingHigh";
 					const ctxSeg = bold(fg(ctxColor, `${ICONS.ctx} ${pctStr} ${tokStr}/${winStr}`));
 
-					let tin = 0;
-					let tout = 0;
-					let totalCR = 0;
-					let totalCW = 0;
-					let totalCost = 0;
-					let lastHit: number | undefined;
-					for (const e of ctx.sessionManager.getEntries()) {
-						if (e?.type === "message" && (e as { message?: { role?: string } }).message?.role === "assistant") {
-							const u = (e as { message?: { usage?: any } }).message?.usage;
-							if (u) {
-								tin += u.input ?? 0;
-								tout += u.output ?? 0;
-								const cr = u.cacheRead ?? 0;
-								const cw = u.cacheWrite ?? 0;
-								totalCR += cr;
-								totalCW += cw;
-								totalCost += u.cost?.total ?? 0;
-								const prompt = (u.input ?? 0) + cr + cw;
-								if (prompt > 0) lastHit = (cr / prompt) * 100;
-							}
-						}
-					}
-					let tokText = `${ICONS.usage} ↑${fmtTok(tin)} ↓${fmtTok(tout)}`;
-					if ((totalCR > 0 || totalCW > 0) && lastHit != null) {
-						tokText += ` CH${lastHit.toFixed(1)}%`;
+					let tokText = `${ICONS.usage} ↑${fmtTok(totals.input)} ↓${fmtTok(totals.output)}`;
+					if ((totals.cacheRead > 0 || totals.cacheWrite > 0) && totals.lastCacheHit != null) {
+						tokText += ` CH${totals.lastCacheHit.toFixed(1)}%`;
 					}
 					const tokSeg = bold(fg("accent", tokText));
-					const costSeg = totalCost > 0 ? fg("warning", `${ICONS.cost} ${totalCost.toFixed(3)}`) : "";
+					const costSeg =
+						totals.cost > 0 ? fg("warning", `${ICONS.cost} ${totals.cost.toFixed(3)}`) : "";
 
 					const displayedTaskDurationMs =
 						taskStartedAt != null ? Math.max(0, now - taskStartedAt) : latestTaskDurationMs;
@@ -321,8 +353,6 @@ export default function registerFooter(pi: ExtensionAPI): void {
 
 	function teardownFooter(ctx: ExtensionContext): void {
 		ctx.ui.setFooter(undefined);
-		if (timer) clearInterval(timer);
-		timer = undefined;
 		stopElapsedTicker();
 		unsubBranch?.();
 		unsubBranch = undefined;
@@ -371,6 +401,7 @@ export default function registerFooter(pi: ExtensionAPI): void {
 
 	pi.on("message_end", (event) => {
 		if (event.message.role !== "assistant") return;
+		totals.add(event.message.usage);
 		latestTps = tpsTracker.finish(event.message.usage.output);
 		requestFooterRender?.();
 	});
@@ -389,6 +420,8 @@ export default function registerFooter(pi: ExtensionAPI): void {
 		taskStartedAt = undefined;
 		latestTaskDurationMs = undefined;
 		stopElapsedTicker();
+		// 新会话时 entries 为空，等价于清零；恢复会话时把既有用量扫进来，之后交给 message_end 增量累计。
+		totals.seedFrom(ctx.sessionManager?.getEntries() ?? []);
 		if (ctx.mode !== "tui" || !userEnabled) return;
 		installFooter(ctx);
 	});

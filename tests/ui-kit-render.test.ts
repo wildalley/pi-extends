@@ -71,15 +71,33 @@ test("Card 不画任何边框字符", () => {
 	assert.ok(card.render(96)[0]?.startsWith("  ●"));
 });
 
-test("MenuList 选中行铺满内容区，说明文字另起一行", () => {
+test("MenuList 选中行只铺到内容块末尾，不铺满整行", () => {
 	const card = buildCard();
 	const lines = card.render(96);
 	const selected = lines.find((line) => line.includes("\x1b[7m"));
 	assert.ok(selected, "应该有一行带选中背景");
 	const inner = selected.slice(selected.indexOf("\x1b[7m") + 4, selected.indexOf("\x1b[27m"));
-	// 内容区宽度 = 卡片宽度 - 左侧留白 2 列。
-	assert.equal(visibleWidth(inner), MAX_CARD_WIDTH - 2);
+	const width = visibleWidth(inner);
+	// 铺满整行会在右边拖出几十列纯色块，比内容还抢眼；这里只铺到数值列末尾。
+	assert.ok(width < MAX_CARD_WIDTH - 2, `选中行铺了 ${width} 列，等于铺满整行`);
+	// 但也得真的把内容包住：光标 + 标签 + 数值都在色块里。
+	assert.ok(inner.includes("主题") && inner.includes("pi-carbon"), `色块没包住内容: ${inner}`);
+	// 整行仍然补齐到卡片宽度（否则选中行会短一截）。
+	assert.equal(visibleWidth(selected), MAX_CARD_WIDTH);
 	// 只有选中项展示 hint，未选中项的 hint 不出现在任何一行里。
 	assert.ok(lines.some((l) => l.includes("移动光标即时预览")));
 	assert.ok(!lines.some((l) => l.includes("cometix 单行")));
+});
+
+test("说明行位置固定：光标移动不会让下面的行整体错开", () => {
+	const card = buildCard();
+	const before = card.render(96);
+	const menu = (card as unknown as { opts: { body: MenuList } }).opts.body;
+	menu.scrollBy(1);
+	const after = card.render(96);
+	assert.equal(after.length, before.length, "移动光标后卡片高度变了，列表会看起来在抖");
+	// 说明文字换成了新选中项的，但仍在同一行号上。
+	const row = before.findIndex((l) => l.includes("移动光标即时预览"));
+	assert.ok(row > 0, "第一项的说明应当渲染出来");
+	assert.ok(after[row]?.includes("cometix 单行"), `说明行应停在第 ${row} 行: ${after[row]}`);
 });

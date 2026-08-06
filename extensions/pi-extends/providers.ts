@@ -8,8 +8,9 @@ import {
 	type CustomProviderConfig,
 	type PiExtendsConfig,
 } from "./config.ts";
+import { editConfig } from "./config-ui.ts";
 import { getAPI } from "./runtime.ts";
-import { getConfig, updateConfig } from "./store.ts";
+import { getConfig } from "./store.ts";
 import { kv, runInfoPage } from "./ui-kit.ts";
 
 export interface ProviderStatusLine {
@@ -126,11 +127,14 @@ export async function addProviderWizard(
 		return;
 	}
 
-	await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (config) => {
-		config.providers = config.providers.filter((p) => p.id !== cfg.id);
-		config.providers.push(cfg);
-	});
-	ctx.ui.notify(`厂商 "${cfg.name}" 已注册并保存。`, "info");
+	await editConfig(
+		ctx,
+		(config) => {
+			config.providers = config.providers.filter((p) => p.id !== cfg.id);
+			config.providers.push(cfg);
+		},
+		{ touched: ["providers"], notify: `厂商 "${cfg.name}" 已注册并保存。` },
+	);
 }
 
 async function collectProvider(
@@ -269,10 +273,13 @@ export async function removeProviderWizard(
 		return;
 	}
 	getAPI().unregisterProvider(target.id);
-	await updateConfig(ctx.cwd, ctx.isProjectTrusted(), (config) => {
-		config.providers = config.providers.filter((p) => p.id !== target.id);
-	});
-	ctx.ui.notify(`厂商 "${target.name}" 已移除。`, "info");
+	await editConfig(
+		ctx,
+		(config) => {
+			config.providers = config.providers.filter((p) => p.id !== target.id);
+		},
+		{ touched: ["providers"], notify: `厂商 "${target.name}" 已移除。` },
+	);
 }
 
 export function reapplyCustomProviders(

