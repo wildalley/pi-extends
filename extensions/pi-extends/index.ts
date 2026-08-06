@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { atomicWriteJson, resolveConfigPaths, sanitizeConfig } from "./config.ts";
+import { atomicWriteJson, resolveConfigPaths, sanitizeConfig, schemaRefFrom } from "./config.ts";
 import { registerAdvisor } from "./advisor.ts";
 import { openCockpit } from "./cockpit.ts";
 import registerFooter from "./footer.ts";
@@ -39,6 +39,7 @@ async function cmdConfig(args: string, ctx: ExtensionCommandContext): Promise<vo
 	}
 	if (action === "generate") {
 		const example = JSON.parse(fs.readFileSync(EXAMPLE_PATH, "utf8"));
+		example.$schema = schemaRefFrom(paths.projectPath);
 		await atomicWriteJson(paths.projectPath, example);
 		reload(ctx.cwd, ctx.isProjectTrusted());
 		ctx.ui.notify(`已写入 ${paths.projectPath}`, "info");

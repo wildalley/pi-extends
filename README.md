@@ -158,6 +158,12 @@ pi remove /path/to/pi-extends
 配置文件为 `.pi/pi-extends.json`（项目级）与 `~/.pi/agent/pi-extends.json`（用户级），
 项目级按字段覆盖用户级。示例见 `templates/pi-extends.example.json`，JSON Schema 见 `schemas/pi-extends.schema.json`。
 
+`/config generate` 写文件时会把 `$schema` 算成从 `.pi/` 指向包内 schema 的相对路径，
+编辑器就能补全和校验字段。这个值不能写死：schema 在包里（项目级安装时是
+`node_modules/pi-extends/schemas/`），配置在 `.pi/`，两者的相对关系取决于装到哪。
+指不到的话编辑器不报错，只是静默不校验 —— 所以由 `tests/config.test.ts` 断言那个
+路径真的能解析到文件。
+
 配置分块：`theme`、`icons`（图标集）、`border`（卡片边框 round/square/none）、
 `currentModel`、`roles`（四角色）、
 `routes`（按用途路由）、`providers`（自定义厂商）、`subagents`、`goal`、

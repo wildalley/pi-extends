@@ -19,6 +19,7 @@ import {
 	applyPatch,
 	diffConfig,
 	emptyBase,
+	schemaRefFrom,
 } from "../extensions/pi-extends/config.ts";
 
 function tmpDir(): string {
@@ -264,4 +265,42 @@ test("icons 缺省时继承上一层，不被默认值覆盖", () => {
 	const base = { ...emptyBase(), icons: "ascii" as const };
 	const result = sanitizeConfig({}, base, "inherit");
 	assert.equal(result.config.icons, "ascii");
+});
+
+// $schema 指不到文件时不会报错，只是编辑器静默不校验 —— 所以只能靠断言守住：
+// 从写盘目录出发解析那个字符串，落点必须真的存在。
+test("写盘的 $schema 从配置文件所在目录能解析到真实的 schema 文件", () => {
+	const dir = tmpDir();
+	const configPath = path.join(dir, ".pi", "pi-extends.json");
+	const ref = schemaRefFrom(configPath);
+	const resolved = path.resolve(path.dirname(configPath), ref);
+	assert.ok(fs.existsSync(resolved), `$schema "${ref}" 解析到 ${resolved}，该文件不存在`);
+	const schema = JSON.parse(fs.readFileSync(resolved, "utf8"));
+	assert.equal(typeof schema.properties, "object");
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("$schema 用 POSIX 分隔符，不含反斜杠", () => {
+	const dir = tmpDir();
+	const ref = schemaRefFrom(path.join(dir, ".pi", "pi-extends.json"));
+	assert.ok(!ref.includes("\\"), `$schema 不能含反斜杠：${ref}`);
+	// 同盘时是相对引用；Windows 跨盘拿不到相对路径，退回 file:// URL。
+	assert.ok(
+		ref.startsWith(".") || ref.startsWith("file://"),
+		`$schema 应为相对引用或 file:// URL：${ref}`,
+	);
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// schema 得跟着字段走：加了 border 却忘了写进 schema，编辑器就会把合法值标红。
+test("schema 覆盖了 sanitizeConfig 认识的所有顶层字段", () => {
+	const dir = tmpDir();
+	const configDir = path.join(dir, ".pi");
+	const ref = schemaRefFrom(path.join(configDir, "pi-extends.json"));
+	const schema = JSON.parse(fs.readFileSync(path.resolve(configDir, ref), "utf8"));
+	for (const key of Object.keys(defaultConfig())) {
+		if (key === "$schema") continue;
+		assert.ok(schema.properties[key] !== undefined, `schema 缺字段 ${key}`);
+	}
+	fs.rmSync(dir, { recursive: true, force: true });
 });

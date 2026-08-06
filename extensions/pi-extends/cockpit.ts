@@ -1562,7 +1562,7 @@ async function configMenu(ctx: ExtensionCommandContext): Promise<void> {
 }
 
 async function runConfigAction(ctx: ExtensionCommandContext, action: string): Promise<void> {
-	const { atomicWriteJson, resolveConfigPaths } = await import("./config.ts");
+	const { atomicWriteJson, resolveConfigPaths, schemaRefFrom } = await import("./config.ts");
 	const paths = resolveConfigPaths(ctx.cwd);
 	if (action === "validate" || action === "reload") {
 		const result = reload(ctx.cwd, ctx.isProjectTrusted());
@@ -1597,6 +1597,7 @@ async function runConfigAction(ctx: ExtensionCommandContext, action: string): Pr
 		}
 		const { EXAMPLE_PATH } = await import("./index.ts");
 		const example = JSON.parse(fs.readFileSync(EXAMPLE_PATH, "utf8"));
+		example.$schema = schemaRefFrom(paths.projectPath);
 		await atomicWriteJson(paths.projectPath, example);
 		reload(ctx.cwd, ctx.isProjectTrusted());
 		ctx.ui.notify(`示例配置已写入 ${paths.projectPath}。`, "info");

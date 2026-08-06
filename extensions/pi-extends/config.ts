@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { DEFAULT_ICON_SET, ICON_SETS, resolveIconSet, type IconSet } from "./icons.ts";
 import {
 	BORDER_STYLES,
@@ -307,6 +308,8 @@ export function isValidPositiveInt(v: unknown): v is number {
 
 export function defaultConfig(): PiExtendsConfig {
 	return {
+		// 只是个占位值。真正写盘的 `$schema` 由 schemaRefFrom() 按目标目录现算，
+		// 见那个函数的注释。
 		$schema: "./schemas/pi-extends.schema.json",
 		version: CONFIG_VERSION,
 		theme: "pi-carbon",
@@ -381,7 +384,8 @@ export function defaultConfig(): PiExtendsConfig {
  * 写盘后，下次加载又会被默认值填回来 —— 删除操作在语义上无法表达。
  * roles 与 routes 未配置时的行为由读取侧兜底（resolveRoute / roleToolDefault），
  * 因此这里留空是安全的，且「未配置」终于真的等于未配置。
- * `defaultConfig()` 现在只用于 `/config generate` 生成模板。
+ * `defaultConfig()` 现在只剩测试在用 —— `/config generate` 直接拷
+ * `templates/pi-extends.example.json`，不走它。
  */
 export function emptyBase(): PiExtendsConfig {
 	return {
@@ -1086,6 +1090,33 @@ export async function atomicWriteJson(filePath: string, data: unknown): Promise<
 		await fs.promises.unlink(tmpPath).catch(() => {});
 		throw err;
 	}
+}
+
+/** 本包根目录：config.ts 在 <root>/extensions/pi-extends/，往上两级。 */
+function packageRoot(): string {
+	return path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+}
+
+/**
+ * 算出从配置文件所在目录指向本包 schema 的相对路径。
+ *
+ * 不能写死 `./schemas/pi-extends.schema.json`：配置落在 `<项目>/.pi/`，
+ * 编辑器按配置文件自身所在目录解析 `$schema`，找的是 `<项目>/.pi/schemas/...`，
+ * 而 schema 实际在 `<项目>/node_modules/pi-extends/schemas/...`。指不到就是静默
+ * 不校验 —— 没有报错，只是补全和字段检查全都不工作，很难发现。
+ *
+ * 用 POSIX 分隔符：`$schema` 是 URI 引用，Windows 上反斜杠不合法。
+ * Windows 跨盘时 path.relative 给不出相对路径（返回 `C:\...`），退回 file:// URL ——
+ * 否则拼出来的是 `./C:/...` 这种既不是路径也不是 URL 的东西。
+ */
+export function schemaRefFrom(configPath: string): string {
+	const target = path.join(packageRoot(), "schemas", "pi-extends.schema.json");
+	const rel = path.relative(path.dirname(configPath), target);
+	if (rel === "" || path.isAbsolute(rel)) {
+		return pathToFileURL(target).href;
+	}
+	const posix = rel.split(path.sep).join("/");
+	return posix.startsWith(".") ? posix : `./${posix}`;
 }
 
 export function resolveConfigPaths(cwd: string): {

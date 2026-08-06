@@ -200,9 +200,12 @@ pi-extends/
 
 项目级配置文件为 `.pi/pi-extends.json`。首版结构如下：
 
+`$schema` 由 `/config generate` 按写盘目录现算（`schemaRefFrom()`），指向包内的
+`schemas/pi-extends.schema.json`；项目级安装时长这样：
+
 ```json
 {
-  "$schema": "./pi-extends.schema.json",
+  "$schema": "../node_modules/pi-extends/schemas/pi-extends.schema.json",
   "version": 1,
   "theme": "pi-carbon",
   "icons": "lucide",
@@ -544,12 +547,22 @@ overlay 不裁掉底部提示行；普通消息不会触发自动分工。
 - `borderMuted` 的源码级禁令覆盖到了新代码：`renderTopRail` 初版用它上色，被
   既有的 `ui-kit-contrast.test.ts` 当场拦下。
 
+- 修掉 `$schema` 指不到文件：写盘的值原先写死 `./schemas/pi-extends.schema.json`，
+  而配置落在 `.pi/`，编辑器按配置文件自身目录解析，找的是 `.pi/schemas/...` ——
+  任何安装方式下都不存在。schema 在包里，配置在项目里，相对关系取决于装到哪，
+  只能按写盘目录现算（`schemaRefFrom()`）。这个 bug 能活到现在是因为指不到时
+  编辑器不报错、只是静默不校验：`border` 和 `icons` 加进 schema 之后照样没人校验。
+  三处路径写法各不相同（`./schemas/...`、`./pi-extends.schema.json`、
+  `./schemas/pi-extends.schema.json`），也说明没人验证过这个字符串。
+  现在由测试断言那个值从写盘目录能解析到真实文件，并且 schema 覆盖所有顶层字段。
+
 完成标准：`verify-icons.mjs` 与 `audit-glyphs.mjs` 全绿；三种边框样式下卡片每行
-显示宽度都精确等于卡片宽度；点击坐标随边框偏移而不整体错列。
+显示宽度都精确等于卡片宽度；点击坐标随边框偏移而不整体错列；
+`$schema` 从写盘目录解析得到真实文件。
 
 ## 14. 测试计划
 
-### 单元测试（已落地 144 条，`npm test`）
+### 单元测试（已落地 147 条，`npm test`）
 
 - 默认配置和深度合并（`config.test.ts`）。
 - 无效 JSON、错误字段和旧版本配置（`config.test.ts`）。
@@ -574,6 +587,8 @@ overlay 不裁掉底部提示行；普通消息不会触发自动分工。
 - 三种边框样式下每行显示宽度都等于卡片宽度、开框只多两行、窄卡片截断标题、
   点击坐标随边框偏移（`ui-kit-render.test.ts`）。
 - `border` 字段校验与未知值降级（`config.test.ts`）。
+- `$schema` 从写盘目录能解析到真实 schema 文件、用 POSIX 分隔符、
+  schema 覆盖所有顶层字段（`config.test.ts`）。
 
 ### 集成测试（已通过真实 Pi TUI 冒烟）
 
