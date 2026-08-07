@@ -62,5 +62,12 @@
   "orchestration": {
     "mode": "suggest",
     "minComplexity": 3
+  },
+  "notifications": {
+    "enabled": false,
+    "minSeconds": 20,
+    "onIdle": true,
+    "onAdvisorBlocker": true,
+    "onSubagent": false
   }
 }

@@ -4,10 +4,16 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { atomicWriteJson, resolveConfigPaths, sanitizeConfig, schemaRefFrom } from "./config.ts";
 import { registerAdvisor } from "./advisor.ts";
+import {
+	AGENT_STATUS_KEY,
+	getAgentStatus,
+	resetAgentStatus,
+} from "./agent-status.ts";
 import { openCockpit } from "./cockpit.ts";
 import registerFooter from "./footer.ts";
 import goalModeExtension from "./goal-mode.ts";
 import { registerKeywords } from "./keywords.ts";
+import { formatDuration, sendNotification, shouldNotifyIdle } from "./notify.ts";
 import { registerOrchestration } from "./orchestration.ts";
 import planModeExtension from "./plan-mode.ts";
 import { reapplyCustomProviders } from "./providers.ts";
@@ -92,6 +98,46 @@ async function cmdAdvisor(args: string, ctx: ExtensionCommandContext): Promise<v
 	await openAdvisorMenu(ctx);
 }
 
+/**
+ * 桌面通知 + footer 子代理计数的生命周期。
+ *
+ * 计时用 agent_start→agent_settled：agent_end 会在自动重试/压缩之间触发多次，
+ * 按它计时会把一次长任务算成好几段。settled 才是「真的停下来等人」。
+ *
+ * 子代理计数刻意不在 settled 时清零 —— 回答刚出来的那几秒正是用户会去看
+ * 「刚才派了几个」的时候。下一轮 agent_start 再归零。
+ */
+function registerNotifications(pi: ExtensionAPI): void {
+	let startedAt: number | undefined;
+
+	pi.on("agent_start", (_event, ctx) => {
+		startedAt = Date.now();
+		if (getAgentStatus().launched > 0) {
+			resetAgentStatus();
+			ctx.ui.setStatus(AGENT_STATUS_KEY, undefined);
+		}
+	});
+
+	pi.on("agent_settled", async (_event, ctx) => {
+		const began = startedAt;
+		startedAt = undefined;
+		if (began === undefined) {
+			return;
+		}
+		const elapsed = Date.now() - began;
+		const config = getConfig(ctx.cwd, ctx.isProjectTrusted());
+		if (!shouldNotifyIdle(elapsed, config.notifications)) {
+			return;
+		}
+		const agents = getAgentStatus();
+		const suffix = agents.launched > 0 ? ` · ${agents.launched} 个子代理` : "";
+		await sendNotification(pi, {
+			title: `pi · ${path.basename(ctx.cwd) || ctx.cwd}`,
+			body: `回合完成 · ${formatDuration(elapsed)}${suffix}`,
+		});
+	});
+}
+
 export default async function (pi: ExtensionAPI): Promise<void> {
 	setAPI(pi);
 
@@ -103,6 +149,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	registerKeywords(pi);
 	// 注册在 keywords 之后：两者都改写同一条输入，而自动分工要先看到关键词有没有命中。
 	registerOrchestration(pi);
+	registerNotifications(pi);
 
 	pi.registerCommand("cockpit", {
 		description: "打开 Pi Extends 主控制台",

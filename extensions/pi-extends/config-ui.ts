@@ -21,6 +21,7 @@ const KEY_LABELS: Record<string, string> = {
 	advisor: "Advisor",
 	keywords: "魔法关键词",
 	orchestration: "自动分工",
+	notifications: "桌面通知",
 };
 
 export interface EditOptions {

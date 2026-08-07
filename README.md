@@ -7,14 +7,15 @@
 - **Cockpit 主控制台**：`/cockpit` 打开一张卡片式面板——顶部实时显示模型 / 运行态 / 上下文占用，主体按「外观 · 模型 · 工作流 · 自动化 · 系统」分栏，每项右侧直接给出当前值。`Tab`/`←→` 切栏、数字与字母热键直达（跨栏有效，按到别栏的键会自动切过去）、`/` 模糊搜索（跨全部栏）、光标记忆，主题与模型选择器在移动光标时即时预览。支持鼠标：点行移光标、再点确认，点 tab 名切栏，滚轮上下移动。
 - **Coding plan 目录**：`/cockpit → 模型 → Coding Plan 与 API` 列出主流厂商的编码套餐与 API（Claude、ChatGPT、Kimi、GLM/智谱、OpenCode、Copilot、Grok、Qwen、DeepSeek、MiniMax、Groq、OpenRouter……），标出每一条对应的 provider id、能不能用订阅登录、环境变量叫什么，可直接填入 `/login`。这些厂商由 Pi 内置目录维护，本扩展不重复注册，只补「我买的套餐对应哪个 id」这段信息；表里没有的用自定义厂商兜底。
 - **主题**：内置 `pi-carbon`（深色工业）、`pi-paper`（浅色纸张）、`pi-contrast`（高对比）、`pi-sakura`（樱色马卡龙）、`pi-terminal`（荧光绿 CRT），全部通过 WCAG 对比度校验；`/theme [名称]` 快速切换或打开选择器。
-- **Cometix footer**：单行底部状态栏显示模型+thinking、当前目录、Git 分支与状态、上下文占比、token 用量、费用、任务时长与 TPS，颜色跟随主题；`/footer [tps]` 开关。
+- **Cometix footer**：单行底部状态栏显示模型+thinking、当前目录、Git 分支与状态、上下文占比、token 用量、费用、任务时长与 TPS，颜色跟随主题；`/footer [tps]` 开关。有缓存命中时显示 `CH92.3%`；跑满 3 轮、累计重发超过 20 万输入 token 却一次都没命中，则把 `CH0%` 标红并提示一次 —— 没有提示缓存时每轮都在全价重发整个上下文，花费按轮数平方增长，而这种故障原本表现为「footer 上什么都不显示」。
 - **模型与角色**：为 Scout / Planner / Worker / Reviewer 四个角色分别绑定模型、thinking level 与工具权限，未指定时回退主模型。
 - **路由角色**：把「用途」映射到模型——写提交信息用便宜模型、攻坚难题用慢模型、读图用多模态模型。`default / smol / slow / plan / commit / vision / designer / task / advisor / tiny` 十条路由，未配置的沿回退链落到主模型，全部为空也能正常工作。
 - **Advisor 旁审**：每轮结束后由第二个模型在独立上下文里只读复查，把 `aside / concern / blocker` 等级的遗漏贴回转录区；转录区的意见始终不画框（那是聊天流，不是面板），不受 `border` 影响；走 `-ne` 子进程，绝不触发新一轮。
 - **魔法关键词**：输入散文里出现 `ultrathink` / `orchestrate` / `workflowz` 时改写本轮行为；代码块、行内代码、路径与标识符中的同名词不触发。
 - **自动分工**：一条消息里其实塞了好几件事时（列了几条待办、点名了好几个文件、篇幅很长、说了「所有/然后/顺便」），提醒把它拆成并行子代理。默认 `suggest`：弹一句问你，答「否」则本会话不再问；`auto` 直接注入，`off` 关闭。阈值可调，`/cockpit → 自动化 → 自动分工`。
 - **自定义厂商**：支持 OpenAI Completions / OpenAI Responses / Anthropic Messages 兼容协议，API Key 只引用环境变量，注册后立即生效。
-- **子代理**：`subagent` 工具支持 single / parallel / chain 三种模式，隔离上下文、流式进度、并发控制与中止传播。
+- **子代理**：`subagent` 工具支持 single / parallel / chain 三种模式，隔离上下文、流式进度、并发控制与中止传播。运行期间 footer 多出一段 `2/3 子代理`（跑完变成 `3 子代理` 或 `1/3 子代理失败`，下一轮开始时清空）；这一段走 pi 的 extension status 槽，因此换成 pi 自带 footer 也照样显示。详情不在 footer 里看 —— footer 拿不到焦点也收不到鼠标事件（pi 只在 alt-screen 里开鼠标上报），子代理的完整输出在转录区，`Ctrl+O` 展开，或 `/agents` 重新发起。
+- **桌面通知**：pi 自己不发任何系统通知（也不响铃），本扩展补上：Linux 走 `notify-send`、macOS 走 `osascript`，其他平台静默跳过。默认关闭 —— SSH / 容器里没有通知守护进程，开着只会每轮白跑一个子进程。`/cockpit → 自动化 → 桌面通知` 打开，可分别控制「回合结束」（默认 20s 以上的回合才通知）、「Advisor 阻塞」（不受时长限制）、「每个子代理」（默认关，派得多会很吵），页内有「发一条试试」当场验证通道。通知正文经过 ANSI/控制字符清洗，且通过 `pi.exec(command, args[])` 传参、不经 shell，模型输出里的 `$(...)`、反引号不可能变成命令。
 - **Goal 模式**：`/goal` 提供 focused 与 autopilot 两种策略；autopilot 有硬性轮次上限，不会无限运行。
 - **Plan 模式**：`/plan` 只读规划，禁用写工具与有副作用的 shell 命令；批准后追踪 `[DONE:n]` 步骤进度。
 
@@ -55,7 +56,7 @@
 
 菜单入口：主题、图标集、卡片边框、Footer、主模型、角色模型与权限、路由角色、厂商、coding plan
 目录、子代理（可直接发起）、Goal、Plan、工作流提示词、Advisor 旁审、魔法关键词、
-自动分工、状态总览、配置文件、Pi 自身设置。所有行按显示宽度精确对齐。
+自动分工、桌面通知、状态总览、配置文件、Pi 自身设置。所有行按显示宽度精确对齐。
 界面全程不用表情符号：emoji 占两列，会顶歪按一列排版的图标列，这一条由
 `tests/icons.test.ts` 按实测宽度守住。面板只在 TUI 模式下渲染，
 `print`/`json`/`rpc` 模式回退为纯文本输出。
@@ -167,7 +168,7 @@ pi remove /path/to/pi-extends
 `currentModel`、`roles`（四角色）、
 `routes`（按用途路由）、`providers`（自定义厂商）、`subagents`、`goal`、
 `advisor`（旁审开关/等级/上限）、`keywords`（魔法关键词开关）、
-`orchestration`（自动分工模式与阈值）。
+`orchestration`（自动分工模式与阈值）、`notifications`（桌面通知）。
 
 刚装好时 `roles` 与 `routes` 都是空的——一切都跟着主模型走，直到你真的配了某一项。
 这样「清空某条路由」才是一个能表达的动作：如果加载链从默认值开始，删掉的字段
@@ -197,7 +198,7 @@ pi remove /path/to/pi-extends
 ```bash
 npm install
 npm run typecheck   # 类型检查
-npm test            # 单元测试（Node 原生 test runner，181 条）
+npm test            # 单元测试（Node 原生 test runner，201 条）
 npm run pack:dry    # 打包检查
 ```
 
@@ -218,6 +219,7 @@ plan-mode / goal-mode 这类事件驱动扩展没有可直接调用的纯函数�
 - Goal autopilot 有硬性轮次上限，达到后自动暂停；用户中止时立即暂停。
 - 自动分工默认只建议、不改写；答一次「否」之后本会话不再打扰。要它自己动手得显式设成 `auto`。
 - 自定义厂商 Base URL 保存前需确认；密钥只通过环境变量提供。
+- 桌面通知只走 `pi.exec(command, args[])`（不经 shell），正文先剥 ANSI 与控制字符再截断；默认关闭。
 - 配置损坏时回退默认值并给出可理解警告，不阻止 Pi 启动。
 
 前两条由 `tests/plan-mode.test.ts` 与 `tests/goal-mode.test.ts` 守住：工具权限的切换与

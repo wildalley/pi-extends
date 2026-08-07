@@ -21,6 +21,7 @@ import {
 	type AdvisorNote,
 } from "./advisor-parse.ts";
 import { editConfig } from "./config-ui.ts";
+import { sendNotification } from "./notify.ts";
 import { runPiChild } from "./pi-child.ts";
 import { getConfig } from "./store.ts";
 
@@ -209,6 +210,15 @@ export function registerAdvisor(pi: ExtensionAPI): void {
 				return;
 			}
 			state.shown += notes.length;
+			// blocker 是「别继续了」，值得把人从别的窗口叫回来；concern/aside 不打断。
+			const blockers = notes.filter((n) => n.severity === "blocker");
+			if (blockers.length > 0 && config.notifications.enabled && config.notifications.onAdvisorBlocker) {
+				void sendNotification(pi, {
+					title: `Advisor 阻塞 ×${blockers.length}`,
+					body: blockers[0].title,
+					urgency: "critical",
+				});
+			}
 			if (ctx.hasUI) {
 				pi.sendMessage(
 					{

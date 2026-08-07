@@ -29,6 +29,7 @@ import {
 	type IconSet,
 } from "./icons.ts";
 import { KEYWORD_HINTS, MAGIC_KEYWORDS } from "./keywords.ts";
+import { notifyCommand, sendNotification } from "./notify.ts";
 import { isPlanExecuting, isPlanModeActive, planController } from "./plan-mode.ts";
 import { collectPlanStatus, openPlansPage } from "./plans.ts";
 import {
@@ -342,6 +343,19 @@ function cockpitItems(ctx: ExtensionCommandContext, config: PiExtendsConfig): Me
 			keywords: "orchestration 分工 拆分 并行 子代理 复杂度",
 		},
 		{
+			id: "notifications",
+			group: "自动化",
+			icon: icon("notify"),
+			label: "桌面通知",
+			hotkey: "n",
+			value: config.notifications.enabled ? "on" : "off",
+			tone: config.notifications.enabled ? undefined : "muted",
+			hint: config.notifications.enabled
+				? `${config.notifications.minSeconds}s 以上的回合结束时弹系统通知`
+				: "跑长任务时切走也能被系统通知叫回来",
+			keywords: "notification 通知 提醒 notify-send osascript 桌面",
+		},
+		{
 			id: "status",
 			group: "系统",
 			icon: icon("status"),
@@ -435,6 +449,9 @@ async function dispatch(ctx: ExtensionCommandContext, id: string): Promise<boole
 			return true;
 		case "orchestration":
 			await orchestrationMenu(ctx);
+			return true;
+		case "notifications":
+			await notificationsMenu(ctx);
 			return true;
 		case "plans":
 			return await openPlansPage(ctx);
@@ -916,19 +933,20 @@ async function askPositiveInt(
 	label: string,
 	current: number,
 	max: number,
+	min = 1,
 ): Promise<number | undefined> {
 	const raw = await runPrompt(ctx, {
 		title,
 		titleRight: `当前 ${current}`,
-		label: `${label}（1-${max}）`,
+		label: `${label}（${min}-${max}）`,
 		initial: String(current),
 	});
 	if (raw === undefined) {
 		return undefined;
 	}
 	const parsed = Number.parseInt(raw.trim(), 10);
-	if (!Number.isFinite(parsed) || parsed < 1) {
-		ctx.ui.notify("请输入不小于 1 的整数。", "warning");
+	if (!Number.isFinite(parsed) || parsed < min) {
+		ctx.ui.notify(`请输入不小于 ${min} 的整数。`, "warning");
 		return undefined;
 	}
 	return Math.min(max, parsed);
@@ -1470,6 +1488,150 @@ async function orchestrationMenu(ctx: ExtensionCommandContext): Promise<void> {
 		}
 	}
 }
+
+/**
+ * 桌面通知设置。
+ *
+ * 单独一页而不是一个纯开关：这个功能最容易「打开了却没反应」（SSH 上没有通知守护进程、
+ * 机器上没装 notify-send），所以状态区第一行直接把要 fork 的命令写出来，
+ * 并放一个「发一条试试」——比让人猜为什么没弹窗省事得多。
+ */
+async function notificationsMenu(ctx: ExtensionCommandContext): Promise<void> {
+	while (true) {
+		const config = getConfig(ctx.cwd, ctx.isProjectTrusted());
+		const n = config.notifications;
+		const cmd = notifyCommand({ title: "pi", body: "" });
+		const picked = await runMenu(ctx, {
+			title: "桌面通知",
+			titleRight: n.enabled ? "on" : "off",
+			status: (theme) => [
+				kv(
+					theme,
+					icon("terminal"),
+					"命令",
+					cmd
+						? theme.fg("text", cmd.command) + theme.fg("dim", `  ← ${process.platform}`)
+						: theme.fg("warning", `${process.platform} 上没有已知的通知命令，开了也不会弹`),
+				),
+				kv(
+					theme,
+					icon("notify"),
+					"时机",
+					theme.fg(
+						n.enabled ? "success" : "dim",
+						`回合结束 ${n.onIdle ? "开" : "关"} · Advisor 阻塞 ${n.onAdvisorBlocker ? "开" : "关"} · 每个子代理 ${n.onSubagent ? "开" : "关"}`,
+					),
+				),
+			],
+			items: [
+				{
+					id: "toggle",
+					group: "开关",
+					icon: n.enabled ? icon("toggleOn") : icon("toggleOff"),
+					label: n.enabled ? "关闭桌面通知" : "启用桌面通知",
+					hotkey: "1",
+					value: n.enabled ? "on" : "off",
+					hint: "默认关闭：SSH / 容器里没有通知守护进程，发出去只是白跑一个子进程",
+				},
+				{
+					id: "minSeconds",
+					group: "开关",
+					icon: icon("duration"),
+					label: "最短回合时长",
+					hotkey: "2",
+					value: `${n.minSeconds}s`,
+					tone: n.enabled ? undefined : ("muted" as ThemeColor),
+					hint: "只有跑够久的回合才值得打断你。0 表示每轮都通知",
+				},
+				{
+					id: "onIdle",
+					group: "时机",
+					icon: n.onIdle ? icon("radioOn") : icon("radioOff"),
+					label: "回合结束",
+					hotkey: "3",
+					value: n.onIdle ? "on" : "off",
+					tone: n.enabled ? undefined : ("muted" as ThemeColor),
+					hint: "模型停下等你输入时通知，受上面的时长门槛限制",
+				},
+				{
+					id: "onAdvisorBlocker",
+					group: "时机",
+					icon: n.onAdvisorBlocker ? icon("radioOn") : icon("radioOff"),
+					label: "Advisor 阻塞",
+					hotkey: "4",
+					value: n.onAdvisorBlocker ? "on" : "off",
+					tone: n.enabled ? undefined : ("muted" as ThemeColor),
+					hint: "旁审报出 blocker 级意见时立刻通知，不受时长门槛限制",
+				},
+				{
+					id: "onSubagent",
+					group: "时机",
+					icon: n.onSubagent ? icon("radioOn") : icon("radioOff"),
+					label: "每个子代理",
+					hotkey: "5",
+					value: n.onSubagent ? "on" : "off",
+					tone: n.enabled ? undefined : ("muted" as ThemeColor),
+					hint: "派得多的时候会很吵，默认关闭",
+				},
+				{
+					id: "test",
+					group: "验证",
+					icon: icon("play"),
+					label: "发一条试试",
+					hotkey: "t",
+					hint: "不改配置，直接 fork 一次通知命令看看弹不弹",
+				},
+			],
+			reserved: 17,
+		});
+		if (picked === undefined) {
+			return;
+		}
+		if (picked === "test") {
+			await sendNotification(getAPI(), {
+				title: "pi-extends",
+				body: "通知通道正常。这条是手动测试。",
+			});
+			ctx.ui.notify(
+				cmd ? `已调用 ${cmd.command}。没看到弹窗说明系统没有通知守护进程。` : "本平台没有可用的通知命令。",
+				cmd ? "info" : "warning",
+			);
+			continue;
+		}
+		if (picked === "minSeconds") {
+			// 允许 0：有人就是想每轮都响
+			const value = await askPositiveInt(ctx, "最短回合时长", "秒", n.minSeconds, 3600, 0);
+			if (value !== undefined) {
+				await editConfig(
+					ctx,
+					(cfg) => {
+						cfg.notifications.minSeconds = value;
+					},
+					{ touched: ["notifications"], notify: `回合至少跑 ${value}s 才通知。` },
+				);
+			}
+			continue;
+		}
+		const key = picked as "toggle" | "onIdle" | "onAdvisorBlocker" | "onSubagent";
+		const field = key === "toggle" ? "enabled" : key;
+		const next = !n[field];
+		await editConfig(
+			ctx,
+			(cfg) => {
+				cfg.notifications[field] = next;
+			},
+			{ touched: ["notifications"], notify: `${NOTIFY_FIELD_LABELS[field]} ${next ? "on" : "off"}。` },
+		);
+	}
+}
+
+/** 开关名 → 通知文案。菜单和 notify 两处共用，免得一处改了另一处忘。 */
+const NOTIFY_FIELD_LABELS: Record<"enabled" | "onIdle" | "onAdvisorBlocker" | "onSubagent", string> = {
+	enabled: "桌面通知",
+	onIdle: "回合结束通知",
+	onAdvisorBlocker: "Advisor 阻塞通知",
+	onSubagent: "子代理通知",
+};
 
 function readPrompt(id: string): string[] {
 	try {

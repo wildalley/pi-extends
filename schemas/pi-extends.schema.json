@@ -151,6 +151,34 @@
         }
       }
     },
+    "notifications": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "桌面通知：Linux 走 notify-send，macOS 走 osascript。默认关闭（SSH/容器里没有通知守护进程）。",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "总开关。关闭时下面所有开关都不生效。"
+        },
+        "minSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "回合至少跑这么久才通知，避免快问快答也弹窗。0 表示每轮都通知。"
+        },
+        "onIdle": {
+          "type": "boolean",
+          "description": "回合结束（模型停下等输入）时通知。"
+        },
+        "onAdvisorBlocker": {
+          "type": "boolean",
+          "description": "Advisor 报出 blocker 级意见时通知，不受 minSeconds 限制。"
+        },
+        "onSubagent": {
+          "type": "boolean",
+          "description": "每个子代理结束时都通知。派得多的时候会很吵，默认关闭。"
+        }
+      }
+    },
     "providers": {
       "type": "array",
       "items": {

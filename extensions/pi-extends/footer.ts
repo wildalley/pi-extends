@@ -77,6 +77,42 @@ function formatDuration(durationMs: number): string {
 }
 
 /**
+ * 累计重发这么多输入 token、且一次缓存都没命中，就把 CH0% 标红。
+ *
+ * 为什么需要这个：原来 CH 段只在 cacheRead/cacheWrite 有值时才出现，于是
+ * 「链路根本不支持提示缓存」这件事表现为 footer 上什么都不显示 —— 最贵的故障
+ * 长得跟一切正常一模一样。而没有缓存时每一轮都在全价重发整个上下文，
+ * 长会话的花费是轮数的平方级，等到发现时账已经出来了。
+ */
+export const NO_CACHE_WARN_INPUT = 200_000;
+
+/** 至少这么多轮才判定，避免「一次贴了个大文件」被当成链路故障。 */
+export const NO_CACHE_WARN_TURNS = 3;
+
+export interface CacheHitView {
+	text: string;
+	/** true 表示这是告警（一次都没命中），渲染成 error 色。 */
+	warn: boolean;
+}
+
+/** footer 里缓存命中那一段。返回 undefined 表示这一段不该出现。 */
+export function formatCacheHit(t: {
+	input: number;
+	turns: number;
+	cacheRead: number;
+	cacheWrite: number;
+	lastCacheHit?: number;
+}): CacheHitView | undefined {
+	if (t.cacheRead > 0 || t.cacheWrite > 0) {
+		return t.lastCacheHit == null ? undefined : { text: `CH${t.lastCacheHit.toFixed(1)}%`, warn: false };
+	}
+	if (t.turns >= NO_CACHE_WARN_TURNS && t.input >= NO_CACHE_WARN_INPUT) {
+		return { text: "CH0%", warn: true };
+	}
+	return undefined;
+}
+
+/**
  * Token / 费用累计。
  *
  * 原来每次 render 都遍历整个 session 的全部 entry 重算一遍。而 render 在任务期间
@@ -89,6 +125,8 @@ class UsageTotals {
 	cacheRead = 0;
 	cacheWrite = 0;
 	cost = 0;
+	/** 已计入的助手回合数，用于判断「没有缓存」是不是真的成了常态。 */
+	turns = 0;
 	lastCacheHit: number | undefined;
 
 	reset(): void {
@@ -97,6 +135,7 @@ class UsageTotals {
 		this.cacheRead = 0;
 		this.cacheWrite = 0;
 		this.cost = 0;
+		this.turns = 0;
 		this.lastCacheHit = undefined;
 	}
 
@@ -114,6 +153,7 @@ class UsageTotals {
 		this.cacheRead += cr;
 		this.cacheWrite += cw;
 		this.cost += usage.cost?.total ?? 0;
+		this.turns++;
 		const prompt = (usage.input ?? 0) + cr + cw;
 		if (prompt > 0) {
 			this.lastCacheHit = (cr / prompt) * 100;
@@ -190,6 +230,8 @@ export default function registerFooter(pi: ExtensionAPI): void {
 
 	const tpsTracker = new TpsTracker();
 	const totals = new UsageTotals();
+	/** 「本通道没有缓存」只提醒一次，按会话重置。 */
+	let noCacheWarned = false;
 	let latestTps: number | undefined;
 	let taskStartedAt: number | undefined;
 	let latestTaskDurationMs: number | undefined;
@@ -301,11 +343,12 @@ export default function registerFooter(pi: ExtensionAPI): void {
 						pct == null ? "thinkingHigh" : pct > 90 ? "error" : pct > 70 ? "warning" : "thinkingHigh";
 					const ctxSeg = bold(fg(ctxColor, `${icon("ctx")} ${pctStr} ${tokStr}/${winStr}`));
 
-					let tokText = `${icon("usage")} ↑${fmtTok(totals.input)} ↓${fmtTok(totals.output)}`;
-					if ((totals.cacheRead > 0 || totals.cacheWrite > 0) && totals.lastCacheHit != null) {
-						tokText += ` CH${totals.lastCacheHit.toFixed(1)}%`;
+					const tokText = `${icon("usage")} ↑${fmtTok(totals.input)} ↓${fmtTok(totals.output)}`;
+					const cacheView = formatCacheHit(totals);
+					let tokSeg = bold(fg("accent", tokText));
+					if (cacheView) {
+						tokSeg += bold(fg(cacheView.warn ? "error" : "accent", ` ${cacheView.text}`));
 					}
-					const tokSeg = bold(fg("accent", tokText));
 					const costSeg =
 						totals.cost > 0 ? fg("warning", `${icon("cost")} ${totals.cost.toFixed(3)}`) : "";
 
@@ -402,9 +445,21 @@ export default function registerFooter(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("message_end", (event) => {
+	pi.on("message_end", (event, ctx) => {
 		if (event.message.role !== "assistant") return;
 		totals.add(event.message.usage);
+		// 只提醒一次：这是链路属性，不是这一轮的问题，每轮弹一次只会被无视。
+		if (!noCacheWarned && formatCacheHit(totals)?.warn === true) {
+			noCacheWarned = true;
+			try {
+				ctx.ui.notify(
+					"当前通道没有任何提示缓存命中：每一轮都在全价重发整个上下文，花费随轮数平方增长。考虑及早压缩上下文、把探索交给子代理，或换一条支持缓存的通道。",
+					"warning",
+				);
+			} catch {
+				// 提示失败不该影响 footer
+			}
+		}
 		latestTps = tpsTracker.finish(event.message.usage.output);
 		requestFooterRender?.();
 	});
@@ -425,6 +480,7 @@ export default function registerFooter(pi: ExtensionAPI): void {
 		stopElapsedTicker();
 		// 新会话时 entries 为空，等价于清零；恢复会话时把既有用量扫进来，之后交给 message_end 增量累计。
 		totals.seedFrom(ctx.sessionManager?.getEntries() ?? []);
+		noCacheWarned = false;
 		if (ctx.mode !== "tui" || !userEnabled) return;
 		installFooter(ctx);
 	});

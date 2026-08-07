@@ -49,7 +49,9 @@
 10. `Prompts`：把工作流提示词填入编辑器。
 11. `Advisor`：旁审开关、最低展示等级与本会话上限。
 12. `Keywords`：魔法关键词总开关。
-13. `Config`：生成示例、校验当前配置、显示配置路径。
+13. `Orchestration`：自动分工模式（off/suggest/auto）与复杂度阈值。
+14. `Notifications`：桌面通知总开关、时长门槛与三个触发点，页内可当场发一条验证。
+15. `Config`：生成示例、校验当前配置、显示配置路径。
 
 同时保留适合熟练用户的直接命令：
 
@@ -64,7 +66,7 @@
 - `/config [status|generate|validate]`
 
 主界面以卡片式菜单呈现：顶部三行实时状态（模型 / 运行态 / 上下文占用），
-主体按「外观 · 模型 · 工作流 · 系统」分组，每项右侧显示当前值；支持数字/字母
+主体按「外观 · 模型 · 工作流 · 自动化 · 系统」分组，每项右侧显示当前值；支持数字/字母
 热键直达、`/` 模糊搜索与光标记忆，主题与模型选择器在移动光标时即时预览。
 所有行按显示宽度对齐（CJK 不撑破布局，emoji 直接禁用），卡片边框可配
 `round`/`square`/`none`，非 TUI 模式回退为纯文本输出。
@@ -87,9 +89,14 @@ pi-extends/
 │       ├── index.ts
 │       ├── cockpit.ts
 │       ├── config.ts
+│       ├── config-ui.ts
 │       ├── providers.ts
+│       ├── plans.ts
 │       ├── roles.ts
 │       ├── subagents.ts
+│       ├── subagent-parse.ts
+│       ├── agent-status.ts
+│       ├── pi-child.ts
 │       ├── goal-mode.ts
 │       ├── plan-mode.ts
 │       ├── plan-utils.ts
@@ -97,11 +104,21 @@ pi-extends/
 │       ├── advisor.ts
 │       ├── advisor-parse.ts
 │       ├── keywords.ts
+│       ├── orchestration.ts
+│       ├── notify.ts
 │       ├── pickers.ts
 │       ├── ui-kit.ts
+│       ├── icons.ts
+│       ├── mouse.ts
 │       ├── footer.ts
 │       ├── runtime.ts
 │       └── store.ts
+├── tools/
+│   ├── preview-cockpit.ts
+│   ├── audit-glyphs.mjs
+│   ├── fetch-icon-tables.mjs
+│   ├── patch-icon-codepoints.mjs
+│   └── verify-icons.mjs
 ├── themes/
 │   ├── pi-carbon.json
 │   ├── pi-paper.json
@@ -118,15 +135,27 @@ pi-extends/
     ├── helpers/
     │   └── extension-harness.ts
     ├── config.test.ts
+    ├── store-scope.test.ts
     ├── plan-mode.test.ts
-    ├── goal-mode.test.ts
     ├── plan-utils.test.ts
+    ├── plan-safety.test.ts
+    ├── goal-mode.test.ts
     ├── subagent-parse.test.ts
+    ├── agent-status.test.ts
     ├── advisor-parse.test.ts
     ├── keywords.test.ts
+    ├── orchestration.test.ts
+    ├── notify.test.ts
     ├── routes.test.ts
+    ├── plans.test.ts
+    ├── icons.test.ts
+    ├── footer-cache.test.ts
+    ├── mouse.test.ts
+    ├── mouse-lifecycle.test.ts
     ├── ui-kit.test.ts
-    └── ui-kit-render.test.ts
+    ├── ui-kit-render.test.ts
+    ├── ui-kit-tabs.test.ts
+    └── ui-kit-contrast.test.ts
 ```
 
 根 `package.json` 的 Pi manifest 与依赖约定：
@@ -141,18 +170,28 @@ pi-extends/
 - `index.ts`：注册命令、工具、provider 和生命周期事件。
 - `cockpit.ts`：主控制台及各配置向导（含厂商、子代理、Goal、Plan、提示词、Advisor、关键词菜单）。
 - `config.ts`：读取、合并、校验和原子写入配置；路由解析与回退链。
+- `config-ui.ts`：配置页（状态总览、生成、校验、作用域切换）。
 - `providers.ts`：内置厂商信息、自定义 provider 注册和模型发现。
+- `plans.ts`：coding plan 目录（订阅套餐 ↔ provider id ↔ 认证方式 ↔ 环境变量名）。
 - `roles.ts`：角色默认值、模型映射和权限策略。
 - `subagents.ts`：启动隔离 Pi 子进程、并发控制、流式结果汇总和中止传播。
+- `subagent-parse.ts`：子进程 JSONL 事件解析与输出截断（纯函数）。
+- `agent-status.ts`：子代理运行态计数与 footer 那一段文案；模块级单例，
+  由 `ctx.ui.setStatus` 推给 pi 的 extension status 槽。
+- `pi-child.ts`：`pi` 子进程的统一拉起、参数拼装与超时/中止处理。
 - `goal-mode.ts`：目标状态机、会话持久化、提示注入和受限自动推进。
 - `plan-mode.ts`：只读工具集、计划提取、批准执行和步骤进度。
 - `routes.ts`：十条路由角色编辑向导；解析优先级 自身配置 → 回退链 → 主模型。
 - `advisor.ts`：每轮后旁审子进程调度、消息卡片注入与开关。
 - `advisor-parse.ts`：旁审输出的纯函数解析、过滤与渲染。
 - `keywords.ts`：魔法关键词检测（只在散文生效）与输入改写。
+- `orchestration.ts`：自动分工的复杂度打分、理由生成与建议/自动注入。
+- `notify.ts`：桌面通知的正文清洗、平台命令构造与一次性可用性探测。
 - `pickers.ts`：主题 / 模型 / thinking 选择器，移动光标即时预览。
 - `ui-kit.ts`：卡片式菜单、状态行、宽度对齐、搜索与热键的通用组件。
-- `footer.ts`：cometix 单行状态栏与 TPS 追踪，导出控制句柄供 cockpit 读写。
+- `icons.ts`：四套字形的图标表与当前图标集（模块级 `active`）。
+- `mouse.ts`：鼠标上报的开关与点击/滚轮坐标解析。
+- `footer.ts`：cometix 单行状态栏、TPS 与缓存命中率追踪，导出控制句柄供 cockpit 读写。
 - `runtime.ts`：运行时 API 单例。
 - `store.ts`：配置读取与原子更新的单例。
 
@@ -198,6 +237,28 @@ pi-extends/
   已经写了魔法关键词、没有 UI 的模式。
 
 首要风险是误触而不是漏判，所以 `tests/orchestration.test.ts` 里防误触的用例更多。
+
+## 4.5 桌面通知
+
+pi 自己完全没有系统通知能力：不发 OSC 9/777/99，也不响铃。派一个跑十分钟的任务出去，
+只能自己回来看有没有停。这一条由扩展补上：Linux `notify-send`、macOS `osascript`，
+其他平台探测不到命令就静默跳过。
+
+- **默认关闭。** SSH / 容器里没有通知守护进程，开着只会每次白跑一个失败的子进程。
+  和 advisor 同一个取舍：装完就有副作用的功能必须由用户显式打开。
+- **不可信正文走参数数组。** `pi.exec(command, args[])` 不经 shell，通知正文来自模型
+  输出和文件路径，绝不能拼进 shell 字符串。正文先剥 ANSI CSI/OSC 与裸控制字符
+  （`sanitizeLine`）再截断到 80/240 字符 —— 控制字符会让 `notify-send` 的参数解析和
+  `osascript` 的字符串字面量同时出问题。
+- **三个独立开关**：`onIdle`（回合结束，受 `minSeconds` 门槛限制，默认 20s）、
+  `onAdvisorBlocker`（旁审报 blocker，不受门槛限制）、`onSubagent`（每个子代理，
+  默认关 —— 并行八个会连弹八条）。
+- **计时用 `agent_start` → `agent_settled`**，不用 `agent_end`：后者在自动重试与压缩
+  之间会触发多次，按它计时会把一次长任务算成好几段。
+- **命令不存在只探测一次。** 第一次 ENOENT / exit 127 之后置位 `notifyUnavailable`，
+  不再 fork。没装 `notify-send` 的机器上，每轮失败一次子进程纯属浪费。
+- 控制台单独给一页而不是一个纯开关：这个功能最容易「打开了却没反应」，所以页内直接
+  写出当前平台探测到的命令，并放一个「发一条试试」当场验证通道。
 
 ## 5. 配置格式
 
@@ -271,6 +332,13 @@ pi-extends/
   "orchestration": {
     "mode": "suggest",
     "minComplexity": 3
+  },
+  "notifications": {
+    "enabled": false,
+    "minSeconds": 20,
+    "onIdle": true,
+    "onAdvisorBlocker": true,
+    "onSubagent": false
   }
 }
 ```
@@ -436,6 +504,7 @@ Plan 与 Goal 同时使用时：
 - 子代理继承明确的 cwd、角色工具白名单和中止信号。
 - Advisor 旁审子进程带 `-ne` 并设环境变量兜底，避免递归拉起旁审；只给只读工具且不触发新一轮。
 - shell 调用使用参数数组，不拼接用户输入为 shell 命令。
+- 桌面通知只走 `pi.exec(command, args[])`（不经 shell），正文先剥 ANSI 与控制字符再截断；默认关闭。
 - 角色名、provider ID、路由名和模型 ID 进行格式校验。
 - 配置解析失败时继续使用上一个有效配置或默认值。
 - 自动模式有硬性轮次上限，不提供无限循环选项。
@@ -591,9 +660,33 @@ overlay 不裁掉底部提示行；普通消息不会触发自动分工。
 完成标准：`plan-mode.test.ts`、`goal-mode.test.ts` 覆盖工具权限切换、进度标记、
 autopilot 的每一条刹车与会话恢复；每条恢复修复都有一个会因回退而失败的用例。
 
+### 阶段九：桌面通知、子代理运行态与缓存命中告警 ✅
+
+三条都属于同一类问题：**任务在跑，但界面上看不出来**。
+
+- 桌面通知（见 4.5）。pi 不发 OSC 9/777/99 也不响铃，派一个跑十分钟的任务出去只能
+  自己回来看。补上 `notify-send` / `osascript`，默认关闭，正文走参数数组不经 shell。
+- footer 多一段子代理运行态。footer 与 `subagent` 工具是两条互不认识的注册链，
+  所以计数放 `agent-status.ts` 的模块级单例，由 `ctx.ui.setStatus` 推给 pi 的
+  extension status 槽 —— 换成 pi 自带 footer 也照样显示，不必两处各写一遍渲染。
+  计数按启动/结束**配对增减**而不是存一次批次快照：一轮里可以有两次 `subagent`
+  调用，后一次不该把前一次的进度覆盖掉。清空点选在下一轮 `agent_start`，
+  不在跑完那一刻 —— 回答刚出来的那几秒正是想看「几个成功几个失败」的时候。
+- footer 的缓存命中率与零命中告警。原来 CH 段只在 `cacheRead`/`cacheWrite` 有值时
+  才画，于是「链路根本不支持提示缓存」这件事的表现是 **footer 上什么都不显示**，
+  和一切正常长得一模一样。而没有缓存时每轮都在全价重发整个上下文，花费按轮数
+  平方增长 —— 最贵的故障配了最安静的提示。改成零命中也显示，`CH0%` 标红。
+  阈值是「≥3 轮」且「累计输入 >20 万 token」两个一起看：一次贴进来一个大文件也
+  能超过 token 阈值，但那不是链路故障，不该标红。整个会话只提醒一次：这是通道
+  属性，不是这一轮的问题，每轮弹一次只会被当成噪音划过去。
+
+完成标准：`notify.test.ts` 覆盖清洗、截断、平台命令与门槛；未装 `notify-send` 的机器上
+每轮至多失败一次子进程；`agent-status.test.ts` 覆盖三种文案与并发配对；
+`footer-cache.test.ts` 覆盖「轮数不够不报」与「多轮零命中必须报」两侧。
+
 ## 14. 测试计划
 
-### 单元测试（已落地 181 条，`npm test`）
+### 单元测试（已落地 201 条，`npm test`）
 
 - 默认配置和深度合并（`config.test.ts`）。
 - 无效 JSON、错误字段和旧版本配置（`config.test.ts`）。
@@ -624,6 +717,16 @@ autopilot 的每一条刹车与会话恢复；每条恢复修复都有一个会�
 - 三种边框样式下每行显示宽度都等于卡片宽度、开框只多两行、窄卡片截断标题、
   点击坐标随边框偏移（`ui-kit-render.test.ts`）。
 - `border` 字段校验与未知值降级（`config.test.ts`）。
+- 桌面通知（`notify.test.ts`）：`sanitizeLine` 剥掉 ANSI CSI/OSC 与裸控制字符、
+  截断到上限、Linux 走 `notify-send` 且参数是数组（不经 shell）、macOS 转义
+  `osascript` 字面量、未知平台返回 `null`、空标题回落到 `pi`、`shouldNotifyIdle`
+  的时长门槛与开关。
+- 子代理运行态（`agent-status.test.ts`）：没派过子代理时不占 footer 槽位、
+  进行中 / 有失败 / 全成功三种文案、并发计数按启动与结束配对（后一次调用不覆盖
+  前一次）、`running` 不会掉到负数、reset 之后那一段消失。
+- 缓存命中（`footer-cache.test.ts`）：有命中时显示命中率且不标红、有 `cacheWrite`
+  但还算不出命中率时不占位、轮数不够时哪怕输入量很大也不告警、多轮全价重发且
+  零命中时标红告警。
 - `$schema` 从写盘目录能解析到真实 schema 文件、用 POSIX 分隔符、
   schema 覆盖所有顶层字段（`config.test.ts`）。
 

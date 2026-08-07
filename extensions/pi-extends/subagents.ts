@@ -6,7 +6,14 @@ import type { Message } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import type { PiExtendsConfig, RoleName } from "./config.ts";
+import {
+	AGENT_STATUS_KEY,
+	formatAgentStatus,
+	markAgentEnd,
+	markAgentStart,
+} from "./agent-status.ts";
 import { icon } from "./icons.ts";
+import { formatDuration, sendNotification } from "./notify.ts";
 import { getPiInvocation, runPiChild } from "./pi-child.ts";
 import { isPlanModeActive } from "./plan-mode.ts";
 import { getAPI } from "./runtime.ts";
@@ -167,6 +174,21 @@ type OnUpdateCallback = (partial: {
 	details: SubagentDetails;
 }) => void;
 
+/**
+ * 把当前计数写进 footer 的 extension status 槽。
+ *
+ * setStatus 内部会 requestRender，所以不必自己触发重绘；formatAgentStatus 返回
+ * undefined 时正好等于「清空这一槽」的约定（setStatus(key, undefined)）。
+ * ctx.ui 在非交互模式（-p）下也存在但没人看，写了也无害，所以不做模式判断。
+ */
+function publishAgentStatus(ctx: ExtensionContext): void {
+	try {
+		ctx.ui.setStatus(AGENT_STATUS_KEY, formatAgentStatus());
+	} catch {
+		// footer 不可用（比如非交互模式）不该影响子代理执行
+	}
+}
+
 async function runSingleRole(
 	ctx: ExtensionContext,
 	config: PiExtendsConfig,
@@ -213,6 +235,12 @@ async function runSingleRole(
 
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
+	// running 计数在这里 ++，finally 里 --。放在角色校验之后：未知角色压根没起子进程，
+	// 不该在 footer 上留一个永远不会结束的「1 个子代理」。
+	markAgentStart();
+	publishAgentStatus(ctx);
+	const startedAt = Date.now();
+	let ok = false;
 	try {
 		const tmp = await writePromptToTempFile(roleName, prompt);
 		tmpPromptDir = tmp.dir;
@@ -265,8 +293,18 @@ async function runSingleRole(
 			currentResult.errorMessage = `子代理超时（${Math.round(SUBAGENT_TIMEOUT_MS / 1000)}s）后被终止。`;
 		}
 		if (child.aborted) throw new Error("Subagent was aborted");
+		ok = child.code === 0 && !child.timedOut;
 		return currentResult;
 	} finally {
+		markAgentEnd(ok);
+		publishAgentStatus(ctx);
+		if (config.notifications.enabled && config.notifications.onSubagent) {
+			void sendNotification(getAPI(), {
+				title: ok ? `子代理 ${role} 完成` : `子代理 ${role} 失败`,
+				body: `${task} · ${formatDuration(Date.now() - startedAt)}`,
+				urgency: ok ? "low" : "normal",
+			});
+		}
 		if (tmpPromptDir) {
 			await fs.promises.rm(tmpPromptDir, { recursive: true, force: true }).catch(() => {});
 		}

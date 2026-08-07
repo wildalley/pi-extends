@@ -155,6 +155,25 @@ export interface KeywordsConfig {
 }
 
 /**
+ * 桌面通知：长任务跑完、旁审报 blocker 时弹一条系统通知。
+ *
+ * 默认关。开着会在每次符合条件时 fork 一个 `notify-send`/`osascript` 子进程，
+ * 而 SSH 进去的机器上根本没有通知守护进程 —— 这类「装完就有副作用」的行为
+ * 应当由用户显式打开，和 advisor 同一个取舍。
+ */
+export interface NotificationsConfig {
+	enabled: boolean;
+	/** 任务时长低于该秒数不通知：几秒就答完的一轮，人还在屏幕前。 */
+	minSeconds: number;
+	/** 整轮结束（agent_end）时通知。 */
+	onIdle: boolean;
+	/** Advisor 报出 blocker 时立刻通知，不受 minSeconds 限制。 */
+	onAdvisorBlocker: boolean;
+	/** 每个子代理结束时通知。默认关 —— 并行八个会连弹八条。 */
+	onSubagent: boolean;
+}
+
+/**
  * 编排建议模式。
  * - `off`：不做任何提示。
  * - `suggest`：识别到适合拆分的任务时给出一条建议卡片，用户按键确认才注入指令。
@@ -208,6 +227,7 @@ export interface PiExtendsConfig {
 	advisor: AdvisorConfig;
 	keywords: KeywordsConfig;
 	orchestration: OrchestrationConfig;
+	notifications: NotificationsConfig;
 }
 
 export interface ConfigLoadResult {
@@ -374,6 +394,13 @@ export function defaultConfig(): PiExtendsConfig {
 			mode: "suggest",
 			minComplexity: 3,
 		},
+		notifications: {
+			enabled: false,
+			minSeconds: 20,
+			onIdle: true,
+			onAdvisorBlocker: true,
+			onSubagent: false,
+		},
 	};
 }
 
@@ -419,6 +446,13 @@ export function emptyBase(): PiExtendsConfig {
 		orchestration: {
 			mode: "suggest",
 			minComplexity: 3,
+		},
+		notifications: {
+			enabled: false,
+			minSeconds: 20,
+			onIdle: true,
+			onAdvisorBlocker: true,
+			onSubagent: false,
 		},
 	};
 }
@@ -703,6 +737,38 @@ function sanitizeKeywords(raw: unknown, base: KeywordsConfig, warnings: string[]
 	};
 }
 
+function sanitizeNotifications(
+	raw: unknown,
+	base: NotificationsConfig,
+	warnings: string[],
+): NotificationsConfig {
+	if (raw === undefined) {
+		return base;
+	}
+	if (!isPlainRecord(raw)) {
+		warnings.push("notifications: 期望对象，忽略");
+		return base;
+	}
+	// minSeconds 允许 0（每轮都通知），所以不能走 rawToPositiveInt。
+	let minSeconds = base.minSeconds;
+	if (raw.minSeconds !== undefined) {
+		if (typeof raw.minSeconds === "number" && Number.isInteger(raw.minSeconds) && raw.minSeconds >= 0) {
+			minSeconds = raw.minSeconds;
+		} else {
+			warnings.push("notifications.minSeconds: 期望非负整数，忽略无效值");
+		}
+	}
+	return {
+		enabled: asOptionalBool(raw.enabled, warnings, "notifications.enabled") ?? base.enabled,
+		minSeconds,
+		onIdle: asOptionalBool(raw.onIdle, warnings, "notifications.onIdle") ?? base.onIdle,
+		onAdvisorBlocker:
+			asOptionalBool(raw.onAdvisorBlocker, warnings, "notifications.onAdvisorBlocker") ??
+			base.onAdvisorBlocker,
+		onSubagent: asOptionalBool(raw.onSubagent, warnings, "notifications.onSubagent") ?? base.onSubagent,
+	};
+}
+
 function sanitizeOrchestration(
 	raw: unknown,
 	base: OrchestrationConfig,
@@ -880,6 +946,7 @@ export function sanitizeConfig(
 	const advisor = sanitizeAdvisor(raw.advisor, base.advisor, warnings);
 	const keywords = sanitizeKeywords(raw.keywords, base.keywords, warnings);
 	const orchestration = sanitizeOrchestration(raw.orchestration, base.orchestration, warnings);
+	const notifications = sanitizeNotifications(raw.notifications, base.notifications, warnings);
 
 	return {
 		config: {
@@ -897,6 +964,7 @@ export function sanitizeConfig(
 			advisor,
 			keywords,
 			orchestration,
+			notifications,
 		},
 		warnings,
 	};

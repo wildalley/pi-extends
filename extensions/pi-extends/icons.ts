@@ -69,6 +69,7 @@ export const GLYPH_TABLE = {
 	advisor: g("\ue1ff", "\uf132", "▲", "?", { lucide: "shield-check", nerd: "fa-shield" }),
 	keywords: g("\ue412", "\uf0d0", "✦", "*", { lucide: "sparkles", nerd: "fa-magic" }),
 	orchestration: g("\ue125", "\uf1e0", "▨", "+", { lucide: "network", nerd: "fa-share_alt" }),
+	notify: g("\ue059", "\uf0f3", "◑", "b", { lucide: "bell", nerd: "fa-bell" }),
 	status: g("\ue038", "\uf0e4", "▣", "=", { lucide: "activity", nerd: "fa-dashboard" }),
 	config: g("\ue316", "\uf1de", "○", ".", { lucide: "file-cog", nerd: "fa-sliders" }),
 	settings: g("\ue154", "\uf013", "◎", ",", { lucide: "settings", nerd: "fa-cog" }),

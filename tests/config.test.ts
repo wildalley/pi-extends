@@ -292,6 +292,33 @@ test("$schema 用 POSIX 分隔符，不含反斜杠", () => {
 	fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("notifications 默认关闭，非法值被忽略并给出警告", () => {
+	assert.equal(defaultConfig().notifications.enabled, false);
+	assert.equal(defaultConfig().notifications.minSeconds, 20);
+
+	const ok = sanitizeConfig({
+		version: 1,
+		notifications: { enabled: true, minSeconds: 0, onSubagent: true },
+	});
+	assert.equal(ok.config.notifications.enabled, true);
+	// minSeconds: 0 合法（每轮都通知），不能被当成「缺省」丢掉
+	assert.equal(ok.config.notifications.minSeconds, 0);
+	assert.equal(ok.config.notifications.onSubagent, true);
+
+	const bad = sanitizeConfig({
+		version: 1,
+		notifications: { enabled: "yes", minSeconds: -3 },
+	});
+	assert.equal(bad.config.notifications.enabled, false);
+	assert.equal(bad.config.notifications.minSeconds, emptyBase().notifications.minSeconds);
+	assert.ok(bad.warnings.some((w) => w.includes("notifications.enabled")));
+	assert.ok(bad.warnings.some((w) => w.includes("notifications.minSeconds")));
+
+	const wrongType = sanitizeConfig({ version: 1, notifications: [] });
+	assert.deepEqual(wrongType.config.notifications, emptyBase().notifications);
+	assert.ok(wrongType.warnings.some((w) => w.includes("notifications")));
+});
+
 // schema 得跟着字段走：加了 border 却忘了写进 schema，编辑器就会把合法值标红。
 test("schema 覆盖了 sanitizeConfig 认识的所有顶层字段", () => {
 	const dir = tmpDir();
