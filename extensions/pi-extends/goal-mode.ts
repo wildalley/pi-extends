@@ -265,7 +265,9 @@ ${state.strategy === "autopilot" ? "每轮结束后会自动继续推进。完�
 	pi.on("session_start", async (_event, ctx) => {
 		const config = getConfig(ctx.cwd, ctx.isProjectTrusted());
 		state = inactiveState(config.goal.maxAutoTurns);
-		const entries = ctx.sessionManager.getEntries();
+		// getBranch()：只看当前 root→leaf 路径。理由同 plan-mode.ts —— getEntries() 会把
+		// 被 rewind 抛弃的分支也算进来，.pop() 可能恢复另一条路的 goal 状态。
+		const entries = ctx.sessionManager.getBranch();
 		const goalEntry = entries
 			.filter((e: { type: string; customType?: string }) => e.type === "custom" && e.customType === "goal-mode")
 			.pop() as { data?: GoalState } | undefined;

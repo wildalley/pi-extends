@@ -382,7 +382,11 @@ After completing a step, include a [DONE:n] tag in your response.`,
 			planModeEnabled = true;
 		}
 
-		const entries = ctx.sessionManager.getEntries();
+		// getBranch() 而不是 getEntries()：会话是一棵树，getEntries() 返回整个文件（含被
+		// 抛弃的分支）。用户 rewind 之后，文件顺序最后一条 plan-mode entry 可能属于另一条
+		// 分支，.pop() 会把那条路的 executing/todos 装回来。这里要的是当前 root→leaf 路径。
+		// 注意别换成 buildContextEntries()：它会裁掉 compaction 割点之前的 entry，状态会直接丢。
+		const entries = ctx.sessionManager.getBranch();
 		const planModeEntry = entries
 			.filter((e: { type: string; customType?: string }) => e.type === "custom" && e.customType === "plan-mode")
 			.pop() as { data?: PlanModeState } | undefined;
@@ -404,15 +408,20 @@ After completing a step, include a [DONE:n] tag in your response.`,
 					break;
 				}
 			}
-			const messages: AssistantMessage[] = [];
-			for (let i = executeIndex + 1; i < entries.length; i++) {
-				const entry = entries[i];
-				if (entry.type === "message" && "message" in entry && isAssistantMessage(entry.message as AgentMessage)) {
-					messages.push(entry.message as AssistantMessage);
+			// 找不到执行起点就别猜：从 entries[0] 扫会把整个会话（含上一轮计划）的
+			// [DONE:n] 都当成本轮进度，误标已完成会直接跳步。
+			// todos 的 completed 已随 plan-mode entry 持久化，跳过这里只是少一层兜底。
+			if (executeIndex >= 0) {
+				const messages: AssistantMessage[] = [];
+				for (let i = executeIndex + 1; i < entries.length; i++) {
+					const entry = entries[i];
+					if (entry.type === "message" && "message" in entry && isAssistantMessage(entry.message as AgentMessage)) {
+						messages.push(entry.message as AssistantMessage);
+					}
 				}
+				const allText = messages.map(getTextContent).join("\n");
+				markCompletedSteps(allText, todoItems);
 			}
-			const allText = messages.map(getTextContent).join("\n");
-			markCompletedSteps(allText, todoItems);
 		}
 
 		if (planModeEnabled) {
