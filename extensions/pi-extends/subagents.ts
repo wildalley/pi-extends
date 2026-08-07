@@ -534,7 +534,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 			};
 		},
 
-		renderCall(args: SubagentParams, theme: any) {
+		renderCall(args: SubagentParams) {
 			if (args.chain && args.chain.length > 0) {
 				let text = `subagent chain (${args.chain.length} steps)`;
 				for (const step of args.chain.slice(0, 3)) {
@@ -558,7 +558,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 			return new Text(`subagent ${args.role || "..."}\n  ${preview}`, 0, 0);
 		},
 
-		renderResult(result: any, options: { expanded: boolean }, theme: any) {
+		renderResult(result, options) {
 			const details = result.details as SubagentDetails | undefined;
 			if (!details || details.results.length === 0) {
 				const text = result.content[0];

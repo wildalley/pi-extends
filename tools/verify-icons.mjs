@@ -1,9 +1,13 @@
 /**
  * 核对 icons.ts 的字形表。改动图标表后必须跑一遍。
  *
- *   curl -sL -o /tmp/lucide-info.json https://unpkg.com/lucide-static@latest/font/info.json
- *   curl -sL -o /tmp/nf.json https://raw.githubusercontent.com/ryanoasis/nerd-fonts/master/glyphnames.json
- *   node --experimental-strip-types tools/verify-icons.mjs
+ *   npm run verify:icons          # 拉表 + 核对，一条命令
+ *   node tools/fetch-icon-tables.mjs && node tools/verify-icons.mjs   # 等价的两步
+ *
+ * 上游表从哪来（按优先级）：
+ *   1. --lucide / --nerd 显式指定的文件
+ *   2. node_modules/lucide-static/font/info.json（装了就用，省一次下载；不装也不影响）
+ *   3. --dir（默认 /tmp）下 fetch-icon-tables.mjs 落的 lucide-info.json / nf.json
  *
  * 检查四件事：
  *   1. lucide 列的码位 == 该行 `lucide:` 字段所写图标名在官方字体里的码位
@@ -14,12 +18,41 @@
  * 前两条本机是测不出来的 —— 码位写错只会让装了对应字体的人看到豆腐块，
  * 没装的人和 CI 都一切正常。所以必须比对上游表，不能靠肉眼或印象。
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { parseArgs } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { GLYPH_TABLE } from "../extensions/pi-extends/icons.ts";
 
-const lucideInfo = JSON.parse(readFileSync("/tmp/lucide-info.json", "utf8"));
-const nf = JSON.parse(readFileSync("/tmp/nf.json", "utf8"));
+const { values } = parseArgs({
+	options: {
+		dir: { type: "string", default: "/tmp" },
+		lucide: { type: "string" },
+		nerd: { type: "string" },
+	},
+});
+
+/**
+ * 按优先级找上游表。找不到就直接告诉用户跑哪条命令 ——
+ * 一个 ENOENT 堆栈说明不了「你少跑了 fetch-icon-tables」。
+ */
+function loadTable(explicit, candidates, what) {
+	const paths = explicit ? [explicit] : candidates;
+	for (const p of paths) {
+		if (existsSync(p)) return { table: JSON.parse(readFileSync(p, "utf8")), from: p };
+	}
+	console.error(`找不到${what}，试过：\n${paths.map((p) => `  ${p}`).join("\n")}`);
+	console.error(`\n先拉表：node tools/fetch-icon-tables.mjs --dir ${values.dir}`);
+	process.exit(1);
+}
+
+const lucideSource = loadTable(
+	values.lucide,
+	["node_modules/lucide-static/font/info.json", `${values.dir}/lucide-info.json`],
+	"Lucide 码位表",
+);
+const nerdSource = loadTable(values.nerd, [`${values.dir}/nf.json`], "Nerd Fonts 字形表");
+const lucideInfo = lucideSource.table;
+const nf = nerdSource.table;
 
 /** Nerd Fonts 码位 → 字形名，用于反查「这个码位到底是什么图标」。 */
 const nerdByCode = new Map();
@@ -76,6 +109,7 @@ for (const [name, entry] of rows) {
 }
 
 console.log(`核对 ${rows.length} 个图标 × 4 套字形 = ${rows.length * 4} 个字形`);
+console.log(`  lucide 表 ${lucideSource.from}\n  nerd 表   ${nerdSource.from}`);
 if (problems.length > 0) {
 	console.error(`\n${problems.length} 个问题：`);
 	for (const p of problems) console.error(`  ${p}`);
