@@ -198,7 +198,7 @@ pi remove /path/to/pi-extends
 ```bash
 npm install
 npm run typecheck   # 类型检查
-npm test            # 单元测试（Node 原生 test runner，201 条）
+npm test            # 单元测试（Node 原生 test runner，213 条）
 npm run pack:dry    # 打包检查
 ```
 
@@ -206,7 +206,8 @@ npm run pack:dry    # 打包检查
 
 plan-mode / goal-mode 这类事件驱动扩展没有可直接调用的纯函数，测试走
 `tests/helpers/extension-harness.ts`：一个假 pi，把注册进来的命令/事件/工具收进 Map，
-由用例主动 emit，断言对着「`setActiveTools` 收到什么、`appendEntry` 落了什么」写。
+由用例主动 emit，断言对着「`setActiveTools` 收到什么、`appendEntry` 落了什么、
+`sessionManager` 走的是 `getBranch` 还是 `getEntries`」写。
 模块级状态用带查询串的动态 `import` 隔离（`plan-mode.ts?case=N` 每次拿到全新实例），
 恢复路径的用例因此可以换一份新实例、只喂 entries，跟真实重启一致。
 `npm test` 只匹配 `tests/*.test.ts`，helpers 不会被当成测试文件。
@@ -215,17 +216,24 @@ plan-mode / goal-mode 这类事件驱动扩展没有可直接调用的纯函数�
 
 ## 安全边界
 
-- Plan 模式拦截 `edit`/`write` 与非只读 bash 命令，且禁止启动 worker 子代理。
+- Plan 模式拦截 `edit`/`write` 与非只读 bash 命令，并按**解析后的工具集**拦下带写权限的子代理
+  （不是按角色名单）：给 `scout` 配上 `edit` 一样会被拦，把 `worker` 改成只读则不再被拦。
+  `bash` 也算写权限 —— 父进程的 bash 允许清单是 `tool_call` 钩子，管不到独立的子进程。
+- 子代理的工具集始终显式下传给子进程（`--tools`）。未配置 `roles` 时用只读默认值，
+  而不是让子进程按 pi 的完整默认工具集启动。
 - Goal autopilot 有硬性轮次上限，达到后自动暂停；用户中止时立即暂停。
 - 自动分工默认只建议、不改写；答一次「否」之后本会话不再打扰。要它自己动手得显式设成 `auto`。
 - 自定义厂商 Base URL 保存前需确认；密钥只通过环境变量提供。
 - 桌面通知只走 `pi.exec(command, args[])`（不经 shell），正文先剥 ANSI 与控制字符再截断；默认关闭。
 - 配置损坏时回退默认值并给出可理解警告，不阻止 Pi 启动。
 
-前两条由 `tests/plan-mode.test.ts` 与 `tests/goal-mode.test.ts` 守住：工具权限的切换与
-还原、bash 允许清单、autopilot 的四条刹车（轮次上限、plan 模式待批准、有待处理消息、
-用户中止）各自一条用例。会话状态的恢复只认当前分支（`getBranch()`）—— 会话是一棵树，
-用户 rewind 之后，按文件顺序取到的最后一条状态 entry 可能属于已被抛弃的那条路。
+前三条由 `tests/plan-mode.test.ts`、`tests/goal-mode.test.ts` 与 `tests/subagent-tools.test.ts`
+守住：工具权限的切换与还原、bash 允许清单、autopilot 的四条刹车（轮次上限、plan 模式待批准、
+有待处理消息、用户中止）、以及子代理 argv 里 `--tools` 的实际取值各自有用例。
+
+会话状态与用量统计都只认当前分支（`getBranch()`）—— 会话是一棵树，用户 rewind 之后，
+按文件顺序取到的最后一条状态 entry 可能属于已被抛弃的那条路，footer 的用量也会把
+废弃分支的 token 一起累进去。
 
 ## 许可证
 

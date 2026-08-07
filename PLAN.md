@@ -686,7 +686,7 @@ autopilot 的每一条刹车与会话恢复；每条恢复修复都有一个会�
 
 ## 14. 测试计划
 
-### 单元测试（已落地 201 条，`npm test`）
+### 单元测试（已落地 213 条，`npm test`）
 
 - 默认配置和深度合并（`config.test.ts`）。
 - 无效 JSON、错误字段和旧版本配置（`config.test.ts`）。
@@ -705,6 +705,14 @@ autopilot 的每一条刹车与会话恢复；每条恢复修复都有一个会�
   autopilot 的四条刹车（轮次上限、plan 模式待批准、有待处理消息、用户中止）各自一条用例、
   pause/resume/block/complete 的状态合法性、会话恢复只认当前分支。
 - 子代理 JSONL 事件解析与输出截断（`subagent-parse.test.ts`）。
+- 子代理工具权限（`subagent-tools.test.ts`）：`roles` 未配置时只读角色的 `--tools`
+  依然下传（加载链从 `emptyBase()` 起，`roles` 是 `{}`，直接读会得到 `undefined`
+  而不传 `--tools`，子进程就按 pi 的完整默认工具集启动）、用户显式配置优先、
+  plan 模式关卡按解析后的工具集判定（配了 `edit` 的 `scout` 被拦、改成只读的
+  `worker` 不被拦、`bash` 算写权限、未知角色不算）。
+- footer 用量累计（`footer-usage.test.ts`）：`seedFrom` 只认 assistant 消息、
+  重复 seed 不翻倍、`lastCacheHit` 取最后一轮、`session_start` 走 `getBranch()`
+  而不是 `getEntries()`（否则 rewind 后废弃分支的 token 会被累进去）。
 - 自动分工打分：短消息与普通长段落不到阈值、代码块与版本号不算数、
   重复词只计一次、有分必有理由（`orchestration.test.ts`）。
 - 卡片 tab 切换、鼠标点击命中与说明行位置固定（`ui-kit-tabs.test.ts`、

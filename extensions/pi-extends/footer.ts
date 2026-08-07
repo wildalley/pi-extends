@@ -119,7 +119,7 @@ export function formatCacheHit(t: {
  * 每秒至少一次，长会话下是每秒一次 O(entries) 扫描。这些量是单调累加的，
  * 在 message_end 里增量累计即可；只在 session_start / 恢复会话时全量扫一次。
  */
-class UsageTotals {
+export class UsageTotals {
 	input = 0;
 	output = 0;
 	cacheRead = 0;
@@ -478,8 +478,11 @@ export default function registerFooter(pi: ExtensionAPI): void {
 		taskStartedAt = undefined;
 		latestTaskDurationMs = undefined;
 		stopElapsedTicker();
-		// 新会话时 entries 为空，等价于清零；恢复会话时把既有用量扫进来，之后交给 message_end 增量累计。
-		totals.seedFrom(ctx.sessionManager?.getEntries() ?? []);
+		// 新会话时为空，等价于清零；恢复会话时把既有用量扫进来，之后交给 message_end 增量累计。
+		// getBranch() 而不是 getEntries()：理由同 plan-mode.ts —— 会话是一棵树，getEntries()
+		// 返回整个文件（含被 rewind 抛弃的分支）。用它 seed 会把废弃分支的 token 也累进去，
+		// footer 显示的用量高于当前上下文实际对应的量，cacheHit 还可能取自另一条路的最后一轮。
+		totals.seedFrom(ctx.sessionManager?.getBranch() ?? []);
 		noCacheWarned = false;
 		if (ctx.mode !== "tui" || !userEnabled) return;
 		installFooter(ctx);

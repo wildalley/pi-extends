@@ -43,6 +43,13 @@ export interface Harness {
 	entries: AnyEvent[];
 	/** 只出现在 getEntries() 里的"别的分支"，用来验证恢复逻辑走的是 getBranch。 */
 	stray: AnyEvent[];
+	/**
+	 * sessionManager 上被调用过的方法名，按调用顺序。
+	 *
+	 * 光靠 stray 只能验证"读到的内容对不对"，读对了也可能是碰巧——
+	 * 比如某处压根没读 session。这个数组让"走的是哪个方法"本身可断言。
+	 */
+	sessionCalls: string[];
 	messages: SentMessage[];
 	userMessages: string[];
 	notes: Note[];
@@ -118,8 +125,14 @@ export function makeHarness(options?: { tools?: string[]; cwd?: string }): Harne
 			return h.hasUI;
 		},
 		sessionManager: {
-			getBranch: () => [...h.entries],
-			getEntries: () => [...h.entries, ...h.stray],
+			getBranch: () => {
+				h.sessionCalls.push("getBranch");
+				return [...h.entries];
+			},
+			getEntries: () => {
+				h.sessionCalls.push("getEntries");
+				return [...h.entries, ...h.stray];
+			},
 			getCwd: () => h.cwd,
 		},
 	};
@@ -169,6 +182,7 @@ export function makeHarness(options?: { tools?: string[]; cwd?: string }): Harne
 		activeTools: [...(options?.tools ?? DEFAULT_TOOLS)],
 		entries: [],
 		stray: [],
+		sessionCalls: [],
 		messages: [],
 		userMessages: [],
 		notes: [],

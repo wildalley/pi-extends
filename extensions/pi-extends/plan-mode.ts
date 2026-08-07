@@ -7,7 +7,12 @@ import { extractTodoItems, isSafeCommand, markCompletedSteps, type TodoItem } fr
 
 const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls"];
 const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write"];
-const PLAN_MODE_DISABLED_TOOLS = new Set<string>(["edit", "write"]);
+/**
+ * Plan 模式下被摘掉的工具。导出是给子代理那条路复用的：
+ * 「plan 模式禁什么」只能有一份定义，否则改了这里忘了那里，
+ * 两条路对「只读」的理解就会悄悄分叉。
+ */
+export const PLAN_MODE_DISABLED_TOOLS = new Set<string>(["edit", "write"]);
 const PLAN_MANAGED_TOOLS = new Set<string>([...PLAN_MODE_TOOLS, ...NORMAL_MODE_TOOLS]);
 
 interface PlanModeState {

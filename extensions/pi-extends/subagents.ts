@@ -15,7 +15,8 @@ import {
 import { icon } from "./icons.ts";
 import { formatDuration, sendNotification } from "./notify.ts";
 import { getPiInvocation, runPiChild } from "./pi-child.ts";
-import { isPlanModeActive } from "./plan-mode.ts";
+import { PLAN_MODE_DISABLED_TOOLS, isPlanModeActive } from "./plan-mode.ts";
+import { resolveRoleTools } from "./roles.ts";
 import { getAPI } from "./runtime.ts";
 import { getConfig } from "./store.ts";
 import {
@@ -104,6 +105,30 @@ const SubagentParams = Type.Object({
 
 type SubagentParams = Static<typeof SubagentParams>;
 
+/**
+ * Plan 模式下算「能改东西」的工具。
+ *
+ * bash 也算：父进程的 bash 每次调用都过 `isSafeCommand` 允许清单，子进程不过 ——
+ * 子代理是独立 pi 进程，父进程的 tool_call 钩子管不到它。plan 模式下放一个带 bash
+ * 的子代理出去，等于把那道允许清单整个绕开。
+ */
+const CHILD_WRITE_TOOLS = new Set<string>([...PLAN_MODE_DISABLED_TOOLS, "bash"]);
+
+/**
+ * 按解析后的工具集判定角色是否有写权限，而不是按角色名单。
+ *
+ * worker 只是「默认带写工具」的那个角色，不是唯一可能带写工具的角色：
+ * 用户给 scout 配上 edit 完全合法，按名字挡就挡不住。反过来，把 worker 的
+ * tools 改成只读后，按名字挡又会拦下本来安全的调用。
+ */
+export function roleWriteTools(config: PiExtendsConfig, role: string): string[] {
+	if (!(role in ROLE_SYSTEM_PROMPTS)) {
+		// 未知角色由 runSingleRole 报错，这里不重复判断，也不当成有写权限。
+		return [];
+	}
+	return resolveRoleTools(config, role as RoleName).filter((t) => CHILD_WRITE_TOOLS.has(t));
+}
+
 function isFailedResult(result: SingleResult): boolean {
 	return (
 		result.exitCode !== 0 ||
@@ -151,7 +176,7 @@ function roleSystemPrompt(
 	return ROLE_SYSTEM_PROMPTS[role];
 }
 
-function buildChildArgs(
+export function buildChildArgs(
 	config: PiExtendsConfig,
 	role: RoleName,
 	task: string,
@@ -162,8 +187,12 @@ function buildChildArgs(
 	const thinking = config.roles[role]?.thinking ?? config.currentModel.thinking;
 	if (model) args.push("--model", model);
 	if (thinking) args.push("--thinking", thinking);
-	const tools = config.roles[role]?.tools;
-	if (tools && tools.length > 0) args.push("--tools", tools.join(","));
+	// resolveRoleTools 而不是 config.roles[role]?.tools：加载链从 emptyBase() 起，
+	// roles 未配置时是 {}，直接读会拿到 undefined —— 于是不传 --tools，子进程按 pi 的
+	// 默认工具集启动（含 edit/write）。scout/planner/reviewer 的「只读」就只剩系统提示词
+	// 在劝，没有任何强制。没有 pi-extends.json 的机器上这是默认行为，不是边缘情况。
+	const tools = resolveRoleTools(config, role);
+	if (tools.length > 0) args.push("--tools", tools.join(","));
 	if (promptFilePath) args.push("--append-system-prompt", promptFilePath);
 	args.push(`Task: ${task}`);
 	return args;
@@ -404,17 +433,23 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 			if (params.chain) for (const step of params.chain) requestedRoles.add(step.role);
 			if (params.tasks) for (const t of params.tasks) requestedRoles.add(t.role);
 			if (params.role) requestedRoles.add(params.role);
-			if (isPlanModeActive() && requestedRoles.has("worker")) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: "Plan 模式下禁止启动具有写权限的 worker 子代理。请先 /plan off 或改用只读角色（scout/planner/reviewer）。",
-						},
-					],
-					details: makeDetails(hasChain ? "chain" : hasTasks ? "parallel" : "single")([]),
-					isError: true,
-				};
+			if (isPlanModeActive()) {
+				const offenders = [...requestedRoles]
+					.map((role) => ({ role, tools: roleWriteTools(config, role) }))
+					.filter((r) => r.tools.length > 0);
+				if (offenders.length > 0) {
+					const detail = offenders.map((o) => `${o.role}（${o.tools.join(", ")}）`).join("、");
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Plan 模式下禁止启动具有写权限的子代理：${detail}。请先 /plan off，或把这些角色的工具改成只读（/roles）。`,
+							},
+						],
+						details: makeDetails(hasChain ? "chain" : hasTasks ? "parallel" : "single")([]),
+						isError: true,
+					};
+				}
 			}
 
 			if (params.chain && params.chain.length > 0) {

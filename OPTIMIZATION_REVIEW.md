@@ -136,3 +136,64 @@
 每条修复都做了变异验证：把 `getBranch()` 换回 `getEntries()`、把恢复闸门放宽成 `>= -1`、
 把 goal 轮次上限改成 `>`，对应用例都会失败。当前基线：`npm test` 181/181，
 `npm run typecheck` 通过，`npm run verify:icons` 全绿（62 图标 × 4 字形）。
+
+## 10. 第二轮审查（2026-08-07）
+
+上一轮集中在测试缺口，这一轮重看了 ui-kit / subagents / footer / notify 与最近一次提交
+的代码。找到两处真问题，都属于「不会报错、只会静默失效」那一类。
+
+### 10.1 只读子代理的「只读」没有强制力（最高价值）
+
+- **位置**：`subagents.ts` `buildChildArgs`
+- **问题**：读的是 `config.roles[role]?.tools`。但加载链从 `emptyBase()` 起、`roles` 是 `{}`
+  （见 `config.ts:417` 的注释：未配置时的行为「由读取侧兜底」），所以没有 `pi-extends.json`
+  的机器上这里拿到 `undefined` → 不传 `--tools` → 子进程按 pi 的**完整默认工具集**启动，
+  含 `edit`/`write`。scout/planner/reviewer 的只读全靠 `ROLE_SYSTEM_PROMPTS` 里那句
+  「只使用只读工具」在劝，没有任何强制。
+- **严重度**：中高。这是**默认配置下的行为**，不是边缘情况；而且它同时把 §10.2 的关卡架空。
+- **修复**：改走 `roles.ts:51` 已有的 `resolveRoleTools`（它本来就是干这个的，只是没人调用）。
+
+### 10.2 plan 模式的子代理关卡按角色名判定
+
+- **位置**：`subagents.ts` `execute` 的 plan 模式检查
+- **问题**：只拦 `requestedRoles.has("worker")`。角色的工具集是用户可配的，
+  于是给 `scout` 配上 `edit` 就能绕过；反过来把 `worker` 改成只读后，本来安全的调用又会被误拦。
+- **修复**：改成按解析后的工具集判定（`roleWriteTools`），并在报错里列出是哪个角色的哪些工具。
+- **一并收紧**：`bash` 也计入写权限。父进程的 `isSafeCommand` 允许清单挂在 `tool_call` 钩子上，
+  管不到独立的子进程 —— plan 模式下放一个带 bash 的子代理出去，等于把那道清单整个绕开。
+  代价：`worker` 即使只配 `["read","bash"]` 现在也会被拦，比原来严格。
+- **未受影响**：`advisor.ts` 硬编码 `--tools READONLY_TOOLS`，没有同类问题。
+
+### 10.3 footer 用量统计仍在用 getEntries()
+
+- **位置**：`footer.ts` `session_start` 的 `totals.seedFrom(...)`
+- **问题**：§9 已经把 plan-mode 与 goal-mode 改成 `getBranch()`，footer 是最后一处漏的。
+  rewind 之后恢复会话，`getEntries()` 返回整个文件，废弃分支的 token 会被一起累进去。
+- **修复**：改用 `getBranch()`，与另外两处对齐。
+- **遗留取舍**：cost 按「实际花掉的钱」算的话，统计废弃分支反而更准。现在跟着 branch 走；
+  若要让 cost 保持全生命周期口径，得把它从 `UsageTotals` 里拆出来单独累。
+
+### 10.4 为了可测性做的三处导出
+
+`UsageTotals`、`buildChildArgs`、`roleWriteTools` 原本都是模块私有，测不到。
+另外给 harness 加了 `sessionCalls`（记录 `sessionManager` 走的哪个方法）—— 光靠 `stray`
+只能验证「读到的内容对不对」，读对了也可能是碰巧压根没读 session，
+而 §10.3 要钉的恰恰是「走的是哪个方法」。
+
+### 10.5 复核后判定不需要动的
+
+- `agent-status.ts` 的 `resetAgentStatus`：注释说「下一轮开始时由 agent_start 调用」，
+  确认 `index.ts:113` 真的挂上了，计数不会跨轮累积。
+- `notify.ts` 的 `notifyUnavailable`：`r.code === 127` 那条注释写的是「shell 找不到命令」，
+  而 `pi.exec` 不经 shell —— 但 ENOENT 那条 catch 分支已经兜住了，行为正确。
+- `mapWithConcurrencyLimit`：某个任务抛错会让 `Promise.all` 整体 reject，其余子进程
+  失去 await。实际只有 abort 路径会抛，而 abort 时那些子进程本就该一起停，不是缺陷。
+
+### 10.6 基线
+
+`npm test` 213/213（原 201，新增 12），`npm run typecheck` 通过。
+§10.1 与 §10.3 各做了变异验证：把 `buildChildArgs` 改回 `config.roles[role]?.tools`
+会挂掉 2 条 `--tools` 断言；把关卡换回按 `worker` 名字挡，会挂掉「配了 edit 的 scout」
+与「改成只读的 worker」两条；把 `seedFrom` 换回 `getEntries()`，会挂掉 `sessionCalls` 那条。
+
+仍然开放：§4 wizard 提取（判定不值得）、§6.1 lucide 首启提示（产品决策）。
