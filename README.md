@@ -99,8 +99,7 @@ export PI_EXTENDS_ICONS=unicode   # lucide | nerd | unicode | ascii
 改图标表之后要跑一遍核对（比对上游码位表，码位写错本机是测不出来的）：
 
 ```bash
-node tools/fetch-icon-tables.mjs
-node --experimental-strip-types tools/verify-icons.mjs
+npm run verify:icons                                              # 拉上游表 + 核对，一条命令
 node --experimental-strip-types tools/preview-cockpit.ts --icons   # 全表四套并排
 ```
 
@@ -198,9 +197,18 @@ pi remove /path/to/pi-extends
 ```bash
 npm install
 npm run typecheck   # 类型检查
-npm test            # 单元测试（Node 原生 test runner）
+npm test            # 单元测试（Node 原生 test runner，181 条）
 npm run pack:dry    # 打包检查
 ```
+
+只跑一个文件：`node --test tests/plan-mode.test.ts`。
+
+plan-mode / goal-mode 这类事件驱动扩展没有可直接调用的纯函数，测试走
+`tests/helpers/extension-harness.ts`：一个假 pi，把注册进来的命令/事件/工具收进 Map，
+由用例主动 emit，断言对着「`setActiveTools` 收到什么、`appendEntry` 落了什么」写。
+模块级状态用带查询串的动态 `import` 隔离（`plan-mode.ts?case=N` 每次拿到全新实例），
+恢复路径的用例因此可以换一份新实例、只喂 entries，跟真实重启一致。
+`npm test` 只匹配 `tests/*.test.ts`，helpers 不会被当成测试文件。
 
 本地冒烟测试：`pi -e ./extensions/pi-extends`，或安装到测试项目后运行 `/cockpit`。
 
@@ -211,6 +219,11 @@ npm run pack:dry    # 打包检查
 - 自动分工默认只建议、不改写；答一次「否」之后本会话不再打扰。要它自己动手得显式设成 `auto`。
 - 自定义厂商 Base URL 保存前需确认；密钥只通过环境变量提供。
 - 配置损坏时回退默认值并给出可理解警告，不阻止 Pi 启动。
+
+前两条由 `tests/plan-mode.test.ts` 与 `tests/goal-mode.test.ts` 守住：工具权限的切换与
+还原、bash 允许清单、autopilot 的四条刹车（轮次上限、plan 模式待批准、有待处理消息、
+用户中止）各自一条用例。会话状态的恢复只认当前分支（`getBranch()`）—— 会话是一棵树，
+用户 rewind 之后，按文件顺序取到的最后一条状态 entry 可能属于已被抛弃的那条路。
 
 ## 许可证
 

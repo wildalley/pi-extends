@@ -115,7 +115,10 @@ pi-extends/
 ├── templates/
 │   └── pi-extends.example.json
 └── tests/
+    ├── helpers/
+    │   └── extension-harness.ts
     ├── config.test.ts
+    ├── plan-mode.test.ts
     ├── goal-mode.test.ts
     ├── plan-utils.test.ts
     ├── subagent-parse.test.ts
@@ -451,7 +454,9 @@ Plan 与 Goal 同时使用时：
 ## 13. 实施阶段
 
 > 状态：首版五阶段均已实现并通过测试（`npm run typecheck`、`npm test`、真实 Pi TUI 冒烟）。
-> 阶段四之后追加了路由角色、Advisor 旁审、魔法关键词与卡片式控制台（见 4.1–4.3）。
+> 阶段四之后追加了路由角色、Advisor 旁审、魔法关键词与卡片式控制台（见 4.1–4.3）；
+> 阶段六–八为发布后的打磨：TUI 几何与自动分工、Lucide 图标与可配边框、
+> 状态机测试与会话恢复修正。
 
 ### 阶段一：包与配置基础 ✅
 
@@ -560,9 +565,35 @@ overlay 不裁掉底部提示行；普通消息不会触发自动分工。
 显示宽度都精确等于卡片宽度；点击坐标随边框偏移而不整体错列；
 `$schema` 从写盘目录解析得到真实文件。
 
+### 阶段八：状态机测试与会话恢复修正 ✅
+
+- plan-mode / goal-mode 的会话恢复改用 `ctx.sessionManager.getBranch()`：会话是一棵**树**，
+  `getEntries()` 返回整个文件（含被 rewind 抛弃的分支），`.pop()` 到的最后一条
+  `plan-mode` / `goal-mode` entry 可能属于另一条路，恢复出来的 executing/todos/轮次
+  就是别人的。要的是当前 root→leaf 路径。同时明确**不能**换成 `buildContextEntries()`：
+  它会裁掉 compaction 割点之前的 entry，状态会直接丢。
+- plan-mode 恢复加一道 `executeIndex >= 0` 的闸门：找不到 `plan-mode-execute` 起点时
+  跳过标记，不再从 `entries[0]` 扫 —— 那样会把整个会话（含上一轮计划）的 `[DONE:n]`
+  都算成本轮进度，误标已完成会直接跳步。真正能触发的路径不是 compaction（那是只增不删的
+  append-only 文件），而是 `deliverAs: "followUp"` 排队期间进程退出：`plan-mode` entry
+  已落盘，`plan-mode-execute` 消息还没。todos 的 completed 已随 entry 持久化，
+  跳过这里只是少一层兜底。
+- 补上两个状态机的测试（见 14 章），并对每条修复做变异验证：把 `getBranch()` 换回
+  `getEntries()`、把闸门放宽成 `>= -1`、把轮次上限改成 `>`，对应用例都必须失败。
+  测试绿了不等于测到了东西。
+- `npm run verify:icons` 把拉表与核对串成一条命令；`verify-icons.mjs` 优先用
+  `node_modules/lucide-static/font/info.json`（装了就省一次下载，没装不影响）。
+  `lucide-static` 本身仍**不进** devDependencies —— 61MB，且 `fetch-icon-tables.mjs`
+  与 `THIRD_PARTY_NOTICES.md` 都已写明这两张表不该让每个 clone 的人付账。
+- `subagents.ts` 的两个 renderer 删掉从未使用的 `theme` 形参（上下文类型足够推导），
+  `extensions/` 里不再有显式 `any`（`Model<any>` 是 pi API 的泛型，保留）。
+
+完成标准：`plan-mode.test.ts`、`goal-mode.test.ts` 覆盖工具权限切换、进度标记、
+autopilot 的每一条刹车与会话恢复；每条恢复修复都有一个会因回退而失败的用例。
+
 ## 14. 测试计划
 
-### 单元测试（已落地 147 条，`npm test`）
+### 单元测试（已落地 181 条，`npm test`）
 
 - 默认配置和深度合并（`config.test.ts`）。
 - 无效 JSON、错误字段和旧版本配置（`config.test.ts`）。
@@ -573,7 +604,13 @@ overlay 不裁掉底部提示行；普通消息不会触发自动分工。
 - 卡片布局与宽度对齐（`ui-kit.test.ts`、`ui-kit-render.test.ts`）。
 - Plan 只读命令 allowlist/denylist、计划步骤与 `[DONE:n]` 提取（`plan-utils.test.ts`、
   `plan-safety.test.ts`）。
-- Goal 状态转换和最大轮次边界（`goal-mode.test.ts`）。
+- Plan 模式状态机（`plan-mode.test.ts`）：enable 后写工具消失、非 plan 管理的工具保留、
+  disable 精确还原启用前的工具集、`[DONE:2]` 只标第 2 步、步骤没全完成时 `agent_end`
+  不清执行态、plan 模式下 `bash` 放行只读命令而拦住 `rm`/管道/重定向/`find -delete`、
+  会话恢复只认当前分支且找不到执行起点时不猜进度。
+- Goal 模式状态机（`goal-mode.test.ts`）：`--autopilot` 解析与轮次上限来自配置、
+  autopilot 的四条刹车（轮次上限、plan 模式待批准、有待处理消息、用户中止）各自一条用例、
+  pause/resume/block/complete 的状态合法性、会话恢复只认当前分支。
 - 子代理 JSONL 事件解析与输出截断（`subagent-parse.test.ts`）。
 - 自动分工打分：短消息与普通长段落不到阈值、代码块与版本号不算数、
   重复词只计一次、有分必有理由（`orchestration.test.ts`）。
@@ -589,6 +626,15 @@ overlay 不裁掉底部提示行；普通消息不会触发自动分工。
 - `border` 字段校验与未知值降级（`config.test.ts`）。
 - `$schema` 从写盘目录能解析到真实 schema 文件、用 POSIX 分隔符、
   schema 覆盖所有顶层字段（`config.test.ts`）。
+
+事件驱动扩展（plan-mode / goal-mode）没有可直接调用的纯函数：行为全在 `pi.on(...)` 的
+回调里，状态是模块级变量。这类模块统一走 `tests/helpers/extension-harness.ts` —— 一个假 pi，
+把注册进来的命令/事件/工具收进 Map，由用例主动 emit，断言对着「`setActiveTools` 收到什么、
+`appendEntry` 落了什么」写。模块级状态用带查询串的动态 `import` 隔离
+（`plan-mode.ts?case=N` 每次拿到全新实例），恢复路径的用例因此可以换一份新实例、只喂
+entries，跟真实重启一致。假 pi 有两处刻意与真实实现对齐，否则测出来的不作数：
+`appendEntry` 深拷贝 data（真实实现落 JSONL，存的是快照），`sendMessage` 同时补一条
+`custom_message` entry（plan-mode 恢复要靠它找执行起点）。
 
 ### 集成测试（已通过真实 Pi TUI 冒烟）
 
