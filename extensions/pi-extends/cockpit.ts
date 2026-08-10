@@ -11,6 +11,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionCommandContext, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { ROLE_NAMES, ROUTE_NAMES, resolveRoute, type PiExtendsConfig, type RoleName } from "./config.ts";
+import { cacheDiagnosticsPage } from "./cache-diagnostics.ts";
 import { advisorController, setAdvisorEnabled, setAdvisorSeverity } from "./advisor.ts";
 import { ADVISOR_SEVERITIES, ORCHESTRATION_MODES, type AdvisorSeverity, type OrchestrationMode } from "./config.ts";
 import { editConfig } from "./config-ui.ts";
@@ -906,12 +907,13 @@ async function providersMenu(ctx: ExtensionCommandContext): Promise<void> {
 			items: [
 				{ id: "status", icon: icon("status"), label: "查看认证状态", hotkey: "1", value: `${providers.length} 个厂商` },
 				{ id: "test", icon: icon("check"), label: "测试自定义厂商", hotkey: "2", hint: "发送一个最多 1 token 的真实请求" },
-				{ id: "add", icon: icon("add"), label: "添加自定义厂商", hotkey: "3", hint: "OpenAI 兼容 / Anthropic 兼容端点" },
+				{ id: "cache", icon: icon("status"), label: "缓存诊断", hotkey: "3", hint: "最近回合的缓存提示与命中证据" },
+				{ id: "add", icon: icon("add"), label: "添加自定义厂商", hotkey: "4", hint: "OpenAI 兼容 / Anthropic 兼容端点" },
 				{
 					id: "edit",
 					icon: icon("edit"),
 					label: "编辑自定义厂商",
-					hotkey: "4",
+					hotkey: "5",
 					value: `${config.providers.length} 个`,
 					tone: config.providers.length === 0 ? "muted" : undefined,
 				},
@@ -919,7 +921,7 @@ async function providersMenu(ctx: ExtensionCommandContext): Promise<void> {
 					id: "remove",
 					icon: icon("remove"),
 					label: "移除自定义厂商",
-					hotkey: "5",
+					hotkey: "6",
 					value: `${config.providers.length} 个`,
 					tone: config.providers.length === 0 ? "muted" : undefined,
 				},
@@ -932,6 +934,8 @@ async function providersMenu(ctx: ExtensionCommandContext): Promise<void> {
 			await providerStatusPage(ctx);
 		} else if (picked === "test") {
 			await testProviderWizard(ctx);
+		} else if (picked === "cache") {
+			await cacheDiagnosticsPage(ctx);
 		} else if (picked === "add") {
 			await addProviderWizard(ctx);
 		} else if (picked === "edit") {

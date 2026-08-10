@@ -57,7 +57,7 @@
   - 动作：配置中增加 `metrics`、`anthropicCacheControl` 与 `supportsLongRetention`；只映射 Pi 已支持的兼容字段，不接受或伪造任意缓存请求头。
   - 验收：Schema、向导、注册逻辑和文档一致；未知中转保持保守行为。
 
-- [ ] **增加中转缓存诊断页**
+- [x] **增加中转缓存诊断页**
   - 动作：展示最近若干轮 input/cacheRead/cacheWrite、命中率、provider/model、是否由中转上报。
   - 验收：用户可以区分“Pi 没发缓存提示”“中转忽略提示”“中转命中了但没回传统计”三类情况；无法确定时明确标为未知。
 

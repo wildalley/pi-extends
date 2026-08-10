@@ -7,7 +7,7 @@
 - **Cockpit 主控制台**：`/cockpit` 打开一张卡片式面板——顶部实时显示模型 / 运行态 / 上下文占用，主体按「外观 · 模型 · 工作流 · 自动化 · 系统」分栏，每项右侧直接给出当前值。`Tab`/`←→` 切栏、数字与字母热键直达（跨栏有效，按到别栏的键会自动切过去）、`/` 模糊搜索（跨全部栏）、光标记忆，主题与模型选择器在移动光标时即时预览。支持鼠标：点行移光标、再点确认，点 tab 名切栏，滚轮上下移动。
 - **Coding plan 目录**：`/cockpit → 模型 → Coding Plan 与 API` 列出主流厂商的编码套餐与 API（Claude、ChatGPT、Kimi、GLM/智谱、OpenCode、Copilot、Grok、Qwen、DeepSeek、MiniMax、Groq、OpenRouter……），标出每一条对应的 provider id、能不能用订阅登录、环境变量叫什么，可直接填入 `/login`。这些厂商由 Pi 内置目录维护，本扩展不重复注册，只补「我买的套餐对应哪个 id」这段信息；表里没有的用自定义厂商兜底。
 - **主题**：内置 `pi-carbon`（深色工业）、`pi-paper`（浅色纸张）、`pi-contrast`（高对比）、`pi-sakura`（樱色马卡龙）、`pi-terminal`（荧光绿 CRT），全部通过 WCAG 对比度校验；`/theme [名称]` 快速切换或打开选择器。
-- **Cometix footer**：单行底部状态栏显示模型+thinking、当前目录、Git 分支与状态、上下文占比、token 用量、费用、任务时长与 TPS，颜色跟随主题；`/footer [tps]` 开关。有缓存命中时显示 `CH92.3%`；上游明确返回缓存字段、跑满 3 轮且累计重发超过 20 万输入 token 却一次都没命中时显示红色 `CH0%`。第三方中转若省略 `cacheRead/cacheWrite`，则显示红色 `CH?`，只提示“指标未上报或尚未命中”，不会把漏报断言成未命中。
+- **Cometix footer**：单行底部状态栏显示模型+thinking、当前目录、Git 分支与状态、上下文占比、token 用量、费用、任务时长与 TPS，颜色跟随主题；`/footer [tps]` 开关。有缓存命中时显示 `CH92.3%`；上游明确返回缓存字段、跑满 3 轮且累计重发超过 20 万输入 token 却一次都没命中时显示红色 `CH0%`。第三方中转若省略 `cacheRead/cacheWrite`，则显示红色 `CH?`，只提示“指标未上报或尚未命中”，不会把漏报断言成未命中。`/cache` 展示当前分支最近 8 轮的缓存提示、指标可信度和命中证据。
 - **模型与角色**：为 Scout / Planner / Worker / Reviewer 四个角色分别绑定模型、thinking level 与工具权限，未指定时回退主模型。
 - **路由角色**：把「用途」映射到模型——写提交信息用便宜模型、攻坚难题用慢模型、读图用多模态模型。`default / smol / slow / plan / commit / vision / designer / task / advisor / tiny` 十条路由，未配置的沿回退链落到主模型，全部为空也能正常工作。
 - **Advisor 旁审**：每轮结束后由第二个模型在独立上下文里只读复查，把 `aside / concern / blocker` 等级的遗漏贴回转录区；转录区的意见始终不画框（那是聊天流，不是面板），不受 `border` 影响；走 `-ne` 子进程，绝不触发新一轮。
@@ -128,6 +128,7 @@ pi remove /path/to/pi-extends
 /roles                   # 四角色的模型、thinking 与工具权限
 /routes                  # 十条路由角色一页看全，回车进入单条编辑
 /advisor                 # Advisor 旁审设置（/advisor on|off 直接切换）
+/cache                   # 最近回合的缓存提示、指标可信度与命中诊断
 /agents                  # 手动发起 single / parallel / chain 子代理
 /footer                  # 开关 cometix footer（/footer tps 切换 TPS）
 /plan on                 # 进入只读 Plan 模式，让模型产出计划
@@ -224,6 +225,9 @@ pi remove /path/to/pi-extends
 `anthropicCacheControl`；这会让 Pi 按该格式发送 `cache_control`，不保证中转一定命中。
 `supportsLongRetention` 只声明端点能力；还需设置 `PI_CACHE_RETENTION=long` 才会请求长保留，
 否则 Pi 保持默认的短保留策略。footer 收到可信指标后显示命中率，指标不可信时显示 `CH?`。
+`/cache` 会进一步列出最近回合：是否能确认 Pi 发出了缓存提示、指标是命中/写入/可信零值
+还是未可靠上报，以及对应判断。中转若命中却不返回统计，客户端无法证明，只会明确标为
+“可能命中但未回传，无法确认”，不会猜成零命中。
 
 ## 开发
 

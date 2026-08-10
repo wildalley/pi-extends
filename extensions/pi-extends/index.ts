@@ -4,6 +4,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { generateExampleConfig, resolveConfigPaths, sanitizeConfig } from "./config.ts";
 import { registerAdvisor } from "./advisor.ts";
 import { registerAutoVisionRouting } from "./auto-vision.ts";
+import { cacheDiagnosticsPage } from "./cache-diagnostics.ts";
 import {
 	AGENT_STATUS_KEY,
 	getAgentStatus,
@@ -199,6 +200,12 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	pi.registerCommand("advisor", {
 		description: "Advisor 旁审：/advisor [on|off]，不带参数打开设置",
 		handler: cmdAdvisor,
+	});
+	pi.registerCommand("cache", {
+		description: "诊断当前分支最近回合的缓存提示、指标与命中率",
+		handler: async (_args, ctx) => {
+			await cacheDiagnosticsPage(ctx);
+		},
 	});
 	pi.registerCommand("agents", {
 		description: "运行单个、并行或串行子代理",
