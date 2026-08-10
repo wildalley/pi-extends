@@ -332,6 +332,29 @@
           "type": "string",
           "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
         },
+        "cache": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "第三方中转的缓存能力声明。缺省/auto 不把归一化后的 0 当成确切零命中。",
+          "properties": {
+            "metrics": {
+              "enum": [
+                "auto",
+                "reported",
+                "unreported"
+              ],
+              "description": "reported 表示中转可靠上报 cacheRead/cacheWrite；unreported 表示不可靠；auto 保守判断。"
+            },
+            "anthropicCacheControl": {
+              "type": "boolean",
+              "description": "OpenAI Completions 兼容端点是否接受 Anthropic 风格 cache_control 标记。"
+            },
+            "supportsLongRetention": {
+              "type": "boolean",
+              "description": "中转是否支持长缓存保留；仍需 PI_CACHE_RETENTION=long 才会请求。"
+            }
+          }
+        },
         "models": {
           "type": "array",
           "minItems": 1,
@@ -367,6 +390,35 @@
               "maxTokens": {
                 "type": "integer",
                 "minimum": 1
+              },
+              "cost": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "每百万 token 的美元价格；缺省表示价格未知，不等同于免费。",
+                "required": [
+                  "input",
+                  "output",
+                  "cacheRead",
+                  "cacheWrite"
+                ],
+                "properties": {
+                  "input": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "output": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cacheRead": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cacheWrite": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                }
               }
             }
           }

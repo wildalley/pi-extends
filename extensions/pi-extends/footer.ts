@@ -8,6 +8,8 @@ import type { ExtensionAPI, ExtensionContext, ReadonlyFooterDataProvider, Theme,
 import type { TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { icon } from "./icons.ts";
+import { isModelCostKnown, trustZeroCacheMetrics } from "./config.ts";
+import { getConfig } from "./store.ts";
 import { spark } from "./ui-kit.ts";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -95,6 +97,13 @@ export interface CacheHitView {
 	warn: boolean;
 }
 
+export function formatCost(total: { cost: number; costUnknown: boolean }): string | undefined {
+	if (total.costUnknown) {
+		return "?";
+	}
+	return total.cost > 0 ? total.cost.toFixed(3) : undefined;
+}
+
 /** footer 里缓存命中那一段。返回 undefined 表示这一段不该出现。 */
 export function formatCacheHit(t: {
 	input: number;
@@ -136,6 +145,7 @@ export class UsageTotals {
 	cacheRead = 0;
 	cacheWrite = 0;
 	cost = 0;
+	costUnknown = false;
 	/** 已计入的助手回合数，用于判断「没有缓存」是不是真的成了常态。 */
 	turns = 0;
 	lastCacheHit: number | undefined;
@@ -148,32 +158,40 @@ export class UsageTotals {
 		this.cacheRead = 0;
 		this.cacheWrite = 0;
 		this.cost = 0;
+		this.costUnknown = false;
 		this.turns = 0;
 		this.lastCacheHit = undefined;
 		this.cacheMetricsReported = undefined;
 	}
 
-	add(usage: {
-		input?: number;
-		output?: number;
-		cacheRead?: number;
-		cacheWrite?: number;
-		cost?: { total?: number };
-	}): void {
-		const hasCacheMetrics =
+	add(
+		usage: {
+			input?: number;
+			output?: number;
+			cacheRead?: number;
+			cacheWrite?: number;
+			cost?: { total?: number };
+		},
+		costKnown = true,
+		zeroCacheMetricsTrusted = true,
+	): void {
+		const cr = typeof usage.cacheRead === "number" && Number.isFinite(usage.cacheRead) ? usage.cacheRead : 0;
+		const cw = typeof usage.cacheWrite === "number" && Number.isFinite(usage.cacheWrite) ? usage.cacheWrite : 0;
+		const hasNumericCacheMetrics =
 			typeof usage.cacheRead === "number" && Number.isFinite(usage.cacheRead) &&
 			typeof usage.cacheWrite === "number" && Number.isFinite(usage.cacheWrite);
+		const hasCacheMetrics =
+			hasNumericCacheMetrics && (zeroCacheMetricsTrusted || cr > 0 || cw > 0);
 		this.cacheMetricsReported =
 			this.cacheMetricsReported === undefined
 				? hasCacheMetrics
 				: this.cacheMetricsReported && hasCacheMetrics;
-		const cr = typeof usage.cacheRead === "number" && Number.isFinite(usage.cacheRead) ? usage.cacheRead : 0;
-		const cw = typeof usage.cacheWrite === "number" && Number.isFinite(usage.cacheWrite) ? usage.cacheWrite : 0;
 		this.input += usage.input ?? 0;
 		this.output += usage.output ?? 0;
 		this.cacheRead += cr;
 		this.cacheWrite += cw;
 		this.cost += usage.cost?.total ?? 0;
+		this.costUnknown ||= !costKnown;
 		this.turns++;
 		const prompt = (usage.input ?? 0) + cr + cw;
 		if (prompt > 0) {
@@ -182,12 +200,23 @@ export class UsageTotals {
 	}
 
 	/** 恢复既有会话时用：全量扫一次，之后交给增量累计。 */
-	seedFrom(entries: readonly unknown[]): void {
+	seedFrom(
+		entries: readonly unknown[],
+		costKnown: (message: { provider?: string; model?: string }) => boolean = () => true,
+		zeroCacheMetricsTrusted: (message: { provider?: string }) => boolean = () => true,
+	): void {
 		this.reset();
 		for (const e of entries) {
-			const entry = e as { type?: string; message?: { role?: string; usage?: unknown } };
+			const entry = e as {
+				type?: string;
+				message?: { role?: string; provider?: string; model?: string; usage?: unknown };
+			};
 			if (entry?.type === "message" && entry.message?.role === "assistant" && entry.message.usage) {
-				this.add(entry.message.usage as Parameters<UsageTotals["add"]>[0]);
+				this.add(
+					entry.message.usage as Parameters<UsageTotals["add"]>[0],
+					costKnown(entry.message),
+					zeroCacheMetricsTrusted(entry.message),
+				);
 			}
 		}
 	}
@@ -370,8 +399,8 @@ export default function registerFooter(pi: ExtensionAPI): void {
 					if (cacheView) {
 						tokSeg += bold(fg(cacheView.warn ? "error" : "accent", ` ${cacheView.text}`));
 					}
-					const costSeg =
-						totals.cost > 0 ? fg("warning", `${icon("cost")} ${totals.cost.toFixed(3)}`) : "";
+					const costText = formatCost(totals);
+					const costSeg = costText ? fg("warning", `${icon("cost")} ${costText}`) : "";
 
 					const displayedTaskDurationMs =
 						taskStartedAt != null ? Math.max(0, now - taskStartedAt) : latestTaskDurationMs;
@@ -468,7 +497,12 @@ export default function registerFooter(pi: ExtensionAPI): void {
 
 	pi.on("message_end", (event, ctx) => {
 		if (event.message.role !== "assistant") return;
-		totals.add(event.message.usage);
+		const config = getConfig(ctx.cwd, ctx.isProjectTrusted());
+		totals.add(
+			event.message.usage,
+			isModelCostKnown(config, event.message.provider, event.message.model),
+			trustZeroCacheMetrics(config, event.message.provider),
+		);
 		// 只提醒一次：这是链路属性，不是这一轮的问题，每轮弹一次只会被无视。
 		if (!noCacheWarned && formatCacheHit(totals)?.warn === true) {
 			noCacheWarned = true;
@@ -506,7 +540,12 @@ export default function registerFooter(pi: ExtensionAPI): void {
 		// getBranch() 而不是 getEntries()：理由同 plan-mode.ts —— 会话是一棵树，getEntries()
 		// 返回整个文件（含被 rewind 抛弃的分支）。用它 seed 会把废弃分支的 token 也累进去，
 		// footer 显示的用量高于当前上下文实际对应的量，cacheHit 还可能取自另一条路的最后一轮。
-		totals.seedFrom(ctx.sessionManager?.getBranch() ?? []);
+		const config = getConfig(ctx.cwd, ctx.isProjectTrusted());
+		totals.seedFrom(
+			ctx.sessionManager?.getBranch() ?? [],
+			(message) => isModelCostKnown(config, message.provider, message.model),
+			(message) => trustZeroCacheMetrics(config, message.provider),
+		);
 		noCacheWarned = false;
 		if (ctx.mode !== "tui" || !userEnabled) return;
 		installFooter(ctx);

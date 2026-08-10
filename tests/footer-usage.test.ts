@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import registerFooter, { UsageTotals } from "../extensions/pi-extends/footer.ts";
+import registerFooter, { formatCost, UsageTotals } from "../extensions/pi-extends/footer.ts";
 import { makeHarness } from "./helpers/extension-harness.ts";
 
 function assistantEntry(usage: Record<string, unknown>) {
@@ -56,6 +56,27 @@ test("缓存字段缺失时记录为未知，不把缺失当作零命中", () =>
 		assistantEntry({ input: 200, output: 20 }),
 	]);
 	assert.equal(totals.cacheMetricsReported, false);
+});
+
+test("自定义中转的归一化零值只有显式声明后才算可靠指标", () => {
+	const conservative = new UsageTotals();
+	conservative.add({ input: 100, output: 10, cacheRead: 0, cacheWrite: 0 }, true, false);
+	assert.equal(conservative.cacheMetricsReported, false);
+
+	const declared = new UsageTotals();
+	declared.add({ input: 100, output: 10, cacheRead: 0, cacheWrite: 0 }, true, true);
+	assert.equal(declared.cacheMetricsReported, true);
+});
+
+test("自定义模型价格未知时 footer 显示问号，不伪装成免费", () => {
+	const totals = new UsageTotals();
+	totals.add({ input: 100, output: 10, cost: { total: 0 } }, false);
+	assert.equal(totals.costUnknown, true);
+	assert.equal(formatCost(totals), "?");
+
+	const priced = new UsageTotals();
+	priced.add({ input: 100, output: 10, cost: { total: 0.125 } }, true);
+	assert.equal(formatCost(priced), "0.125");
 });
 
 test("session_start 从 getBranch() 取 entries，不是 getEntries()", () => {

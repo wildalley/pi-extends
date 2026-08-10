@@ -10,6 +10,8 @@ import {
 	isValidBaseUrl,
 	isValidEnvVarName,
 	isValidModelId,
+	isModelCostKnown,
+	trustZeroCacheMetrics,
 	isValidPositiveInt,
 	isValidProviderId,
 	isValidRoleName,
@@ -189,6 +191,36 @@ test("无效 provider 被跳过并产生警告", () => {
 	assert.equal(result.config.providers[0]?.id, "ok");
 	assert.ok(result.warnings.some((w) => w.includes("bad url")));
 	assert.ok(result.warnings.some((w) => w.includes("未提供任何模型")));
+});
+
+test("自定义模型价格完整保留，缺失或非法价格保持未知", () => {
+	const result = sanitizeConfig({
+		providers: [{
+			id: "relay",
+			name: "Relay",
+			baseUrl: "https://relay.example.com/v1",
+			api: "openai-completions",
+			apiKeyEnv: "RELAY_KEY",
+			cache: { metrics: "reported", anthropicCacheControl: true, supportsLongRetention: true },
+			models: [
+				{ id: "priced", input: ["text", "image"], cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1.25 } },
+				{ id: "unknown" },
+				{ id: "invalid", cost: { input: -1, output: 2, cacheRead: 0, cacheWrite: 0 } },
+			],
+		}],
+	});
+	const provider = result.config.providers[0];
+	assert.deepEqual(provider?.models[0]?.input, ["text", "image"]);
+	assert.deepEqual(provider?.models[0]?.cost, { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1.25 });
+	assert.equal(isModelCostKnown(result.config, "relay", "priced"), true);
+	assert.equal(isModelCostKnown(result.config, "relay", "unknown"), false);
+	assert.equal(isModelCostKnown(result.config, "relay", "invalid"), false);
+	assert.equal(isModelCostKnown(result.config, "anthropic", "claude"), true);
+	assert.equal(trustZeroCacheMetrics(result.config, "relay"), true);
+	const conservative = structuredClone(result.config);
+	delete conservative.providers[0]?.cache;
+	assert.equal(trustZeroCacheMetrics(conservative, "relay"), false);
+	assert.ok(result.warnings.some((warning) => warning.includes("cost.input")));
 });
 
 test("无效字段产生警告但不阻止加载", () => {

@@ -45,8 +45,10 @@ import {
 import {
 	addProviderWizard,
 	collectProviderStatus,
+	editProviderWizard,
 	providerStatusPage,
 	removeProviderWizard,
+	testProviderWizard,
 } from "./providers.ts";
 import {
 	describeRole,
@@ -903,12 +905,21 @@ async function providersMenu(ctx: ExtensionCommandContext): Promise<void> {
 				),
 			items: [
 				{ id: "status", icon: icon("status"), label: "查看认证状态", hotkey: "1", value: `${providers.length} 个厂商` },
-				{ id: "add", icon: icon("add"), label: "添加自定义厂商", hotkey: "2", hint: "OpenAI 兼容 / Anthropic 兼容端点" },
+				{ id: "test", icon: icon("check"), label: "测试自定义厂商", hotkey: "2", hint: "发送一个最多 1 token 的真实请求" },
+				{ id: "add", icon: icon("add"), label: "添加自定义厂商", hotkey: "3", hint: "OpenAI 兼容 / Anthropic 兼容端点" },
+				{
+					id: "edit",
+					icon: icon("edit"),
+					label: "编辑自定义厂商",
+					hotkey: "4",
+					value: `${config.providers.length} 个`,
+					tone: config.providers.length === 0 ? "muted" : undefined,
+				},
 				{
 					id: "remove",
 					icon: icon("remove"),
 					label: "移除自定义厂商",
-					hotkey: "3",
+					hotkey: "5",
 					value: `${config.providers.length} 个`,
 					tone: config.providers.length === 0 ? "muted" : undefined,
 				},
@@ -919,8 +930,12 @@ async function providersMenu(ctx: ExtensionCommandContext): Promise<void> {
 		}
 		if (picked === "status") {
 			await providerStatusPage(ctx);
+		} else if (picked === "test") {
+			await testProviderWizard(ctx);
 		} else if (picked === "add") {
 			await addProviderWizard(ctx);
+		} else if (picked === "edit") {
+			await editProviderWizard(ctx);
 		} else if (picked === "remove") {
 			await removeProviderWizard(ctx);
 		}

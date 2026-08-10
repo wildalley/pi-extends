@@ -187,18 +187,43 @@ pi remove /path/to/pi-extends
       "baseUrl": "https://proxy.example.com/v1",
       "api": "openai-completions",
       "apiKeyEnv": "MY_LLM_API_KEY",
-      "models": [{ "id": "my-model", "name": "My Model", "reasoning": false }]
+      "cache": {
+        "metrics": "reported",
+        "anthropicCacheControl": true,
+        "supportsLongRetention": false
+      },
+      "models": [
+        {
+          "id": "my-model",
+          "name": "My Model",
+          "reasoning": false,
+          "input": ["text", "image"],
+          "contextWindow": 128000,
+          "maxTokens": 8192,
+          "cost": {
+            "input": 1,
+            "output": 4,
+            "cacheRead": 0.1,
+            "cacheWrite": 1.25
+          }
+        }
+      ]
     }
   ]
 }
 ```
 
 配置中只保存 `$MY_LLM_API_KEY` 这类环境变量引用，绝不写入密钥明文。
+价格单位是美元 / 百万 token；不填 `cost` 表示价格未知，footer 显示 `?`，不会误报为免费。
+`input` 包含 `image` 后，该模型才能被视觉路由识别。
 
-缓存说明：扩展不额外实现一层代理缓存，也不会替第三方中转自动添加 prompt-cache
-请求头或 TTL。缓存是否生效由实际 provider/中转协议决定；Pi 返回完整
-`cacheRead/cacheWrite` 时 footer 计算命中率，字段缺失时标为 `CH?`。因此“中转支持缓存但
-没有回传指标”与“中转没有缓存”目前只能通过中转控制台或请求日志进一步确认。
+缓存说明：扩展不额外实现一层代理缓存，缓存是否生效仍由实际 provider/中转协议决定。
+`cache.metrics` 只描述统计字段是否可信：`reported` 表示中转会可靠返回
+`cacheRead/cacheWrite`，`unreported` 表示不会可靠返回，`auto`（默认）采取保守判断。
+只有明确确认 OpenAI Completions 兼容中转接受 Anthropic 风格缓存标记时，才打开
+`anthropicCacheControl`；这会让 Pi 按该格式发送 `cache_control`，不保证中转一定命中。
+`supportsLongRetention` 只声明端点能力；还需设置 `PI_CACHE_RETENTION=long` 才会请求长保留，
+否则 Pi 保持默认的短保留策略。footer 收到可信指标后显示命中率，指标不可信时显示 `CH?`。
 
 ## 开发
 

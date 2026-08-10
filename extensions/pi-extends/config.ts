@@ -108,6 +108,14 @@ export const PROVIDER_APIS: readonly ProviderApi[] = [
 
 export type GoalMode = "focused" | "autopilot";
 
+/** 自定义模型价格，单位与 Pi 一致：美元 / 百万 token。 */
+export interface CustomModelCostConfig {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+}
+
 export interface CustomModelConfig {
 	id: string;
 	name?: string;
@@ -115,6 +123,8 @@ export interface CustomModelConfig {
 	input?: ("text" | "image")[];
 	contextWindow?: number;
 	maxTokens?: number;
+	/** 缺省表示价格未知，不能等同于免费。 */
+	cost?: CustomModelCostConfig;
 }
 
 export interface CustomProviderConfig {
@@ -123,7 +133,19 @@ export interface CustomProviderConfig {
 	baseUrl: string;
 	api: ProviderApi;
 	apiKeyEnv: string;
+	cache?: CustomProviderCacheConfig;
 	models: CustomModelConfig[];
+}
+
+export type CacheMetricsMode = "auto" | "reported" | "unreported";
+
+export interface CustomProviderCacheConfig {
+	/** auto 对自定义中转保持保守：正数可确认命中，零值仍视为可能被归一化。 */
+	metrics?: CacheMetricsMode;
+	/** OpenAI Completions 兼容端点是否接受 Anthropic 风格 cache_control 标记。 */
+	anthropicCacheControl?: boolean;
+	/** 是否支持 long retention；Pi 默认仍使用 short，long 由 PI_CACHE_RETENTION=long 启用。 */
+	supportsLongRetention?: boolean;
 }
 
 export interface RoleConfig {
@@ -607,6 +629,33 @@ function sanitizeProvider(raw: unknown, warnings: string[]): CustomProviderConfi
 		warnings.push(`providers.${id}.apiKeyEnv: 无效环境变量名 "${String(apiKeyEnv)}"，跳过`);
 		return undefined;
 	}
+	let cache: CustomProviderCacheConfig | undefined;
+	if (raw.cache !== undefined) {
+		if (!isPlainRecord(raw.cache)) {
+			warnings.push(`providers.${id}.cache: 期望对象，忽略`);
+		} else {
+			cache = {};
+			const metrics = raw.cache.metrics;
+			if (metrics === "auto" || metrics === "reported" || metrics === "unreported") {
+				cache.metrics = metrics;
+			} else if (metrics !== undefined) {
+				warnings.push(`providers.${id}.cache.metrics: 未知模式 "${String(metrics)}"，忽略`);
+			}
+			const anthropicCacheControl = asOptionalBool(
+				raw.cache.anthropicCacheControl,
+				warnings,
+				`providers.${id}.cache.anthropicCacheControl`,
+			);
+			if (anthropicCacheControl !== undefined) cache.anthropicCacheControl = anthropicCacheControl;
+			const supportsLongRetention = asOptionalBool(
+				raw.cache.supportsLongRetention,
+				warnings,
+				`providers.${id}.cache.supportsLongRetention`,
+			);
+			if (supportsLongRetention !== undefined) cache.supportsLongRetention = supportsLongRetention;
+			if (Object.keys(cache).length === 0) cache = undefined;
+		}
+	}
 	let models: CustomModelConfig[] = [];
 	if (raw.models !== undefined) {
 		if (Array.isArray(raw.models)) {
@@ -652,6 +701,10 @@ function sanitizeProvider(raw: unknown, warnings: string[]): CustomProviderConfi
 				if (maxTokens !== undefined) {
 					entry.maxTokens = maxTokens;
 				}
+				const cost = sanitizeModelCost(m.cost, warnings, `providers.${id}.models.${modelId}.cost`);
+				if (cost !== undefined) {
+					entry.cost = cost;
+				}
 				models.push(entry);
 			}
 		} else {
@@ -662,7 +715,70 @@ function sanitizeProvider(raw: unknown, warnings: string[]): CustomProviderConfi
 		warnings.push(`providers.${id}: 未提供任何模型，跳过`);
 		return undefined;
 	}
-	return { id, name, baseUrl, api, apiKeyEnv, models };
+	return {
+		id,
+		name,
+		baseUrl,
+		api,
+		apiKeyEnv,
+		...(cache ? { cache } : {}),
+		models,
+	};
+}
+
+function sanitizeModelCost(
+	raw: unknown,
+	warnings: string[],
+	field: string,
+): CustomModelCostConfig | undefined {
+	if (raw === undefined) {
+		return undefined;
+	}
+	if (!isPlainRecord(raw)) {
+		warnings.push(`${field}: 期望价格对象，忽略`);
+		return undefined;
+	}
+	const keys = ["input", "output", "cacheRead", "cacheWrite"] as const;
+	const values: Partial<CustomModelCostConfig> = {};
+	for (const key of keys) {
+		const value = raw[key];
+		if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+			warnings.push(`${field}.${key}: 期望非负数字，忽略整组价格`);
+			return undefined;
+		}
+		values[key] = value;
+	}
+	return values as CustomModelCostConfig;
+}
+
+/** 自定义 provider 中缺少价格的模型返回 false；内置模型由 Pi 自己维护价格。 */
+export function isModelCostKnown(
+	config: PiExtendsConfig,
+	providerId: string | undefined,
+	modelId: string | undefined,
+): boolean {
+	if (!providerId || !modelId) {
+		return true;
+	}
+	const provider = config.providers.find((candidate) => candidate.id === providerId);
+	if (!provider) {
+		return true;
+	}
+	return provider.models.find((candidate) => candidate.id === modelId)?.cost !== undefined;
+}
+
+/**
+ * Pi 的统一 Usage 会把缺失缓存字段归一化为 0。内置 provider 的语义由 Pi 保证；
+ * 自定义中转只有显式声明 reported 时，0 才能被当作“确实零命中”。
+ */
+export function trustZeroCacheMetrics(
+	config: PiExtendsConfig,
+	providerId: string | undefined,
+): boolean {
+	if (!providerId) return true;
+	const provider = config.providers.find((candidate) => candidate.id === providerId);
+	if (!provider) return true;
+	return provider.cache?.metrics === "reported";
 }
 
 function rawToPositiveInt(raw: unknown, warnings: string[], field: string): number | undefined {
