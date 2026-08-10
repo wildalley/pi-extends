@@ -1216,13 +1216,13 @@ async function planMenu(ctx: ExtensionCommandContext): Promise<void> {
 			return;
 		}
 		if (picked === "on") {
-			planController.enable?.(ctx);
+			await planController.enable?.(ctx);
 		} else if (picked === "off") {
-			planController.disable?.(ctx);
+			await planController.disable?.(ctx);
 		} else if (picked === "status") {
 			planController.status?.(ctx);
 		} else if (picked === "execute") {
-			planController.execute?.(ctx);
+			await planController.execute?.(ctx);
 			return;
 		}
 	}

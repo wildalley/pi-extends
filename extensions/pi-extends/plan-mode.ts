@@ -1,9 +1,13 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key } from "@earendil-works/pi-tui";
+import type { ThinkingLevel } from "./config.ts";
 import { icon } from "./icons.ts";
 import { extractTodoItems, isSafeCommand, markCompletedSteps, type TodoItem } from "./plan-utils.ts";
+import { formatRouteDiagnostics, fullModelId, inventoryFromContext, resolveRuntimeRoute } from "./route-runtime.ts";
+import { getConfig } from "./store.ts";
 
 const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls"];
 const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write"];
@@ -28,10 +32,17 @@ interface PlanModeState {
 	toolsBeforePlanMode?: string[];
 }
 
+interface PlanRouteRestore {
+	previousModel: Model<any>;
+	previousThinking: ThinkingLevel;
+	switchedModel: Model<any>;
+}
+
 let planModeEnabled = false;
 let executionMode = false;
 let todoItems: TodoItem[] = [];
 let toolsBeforePlanMode: string[] | undefined;
+let planRouteRestore: PlanRouteRestore | undefined;
 
 export function isPlanModeActive(): boolean {
 	return planModeEnabled;
@@ -42,10 +53,10 @@ export function isPlanExecuting(): boolean {
 }
 
 export interface PlanController {
-	enable(ctx: ExtensionContext): void;
-	disable(ctx: ExtensionContext): void;
+	enable(ctx: ExtensionContext): Promise<void>;
+	disable(ctx: ExtensionContext): Promise<void>;
 	status(ctx: ExtensionContext): void;
-	execute(ctx: ExtensionContext): void;
+	execute(ctx: ExtensionContext): Promise<void>;
 }
 
 export const planController: Partial<PlanController> = {};
@@ -123,21 +134,73 @@ function restoreNormalModeTools(pi: ExtensionAPI): void {
 	toolsBeforePlanMode = undefined;
 }
 
-function enablePlanMode(pi: ExtensionAPI, ctx: ExtensionContext): void {
+async function activatePlanRoute(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
+	// The registry/current model are present in supported Pi versions. Keep this guard so
+	// state-machine tests and older hosts can still exercise Plan's tool restrictions.
+	if (!ctx.model || !ctx.modelRegistry) return;
+	const config = getConfig(ctx.cwd, ctx.isProjectTrusted());
+	const resolution = resolveRuntimeRoute(config, "plan", inventoryFromContext(ctx));
+	if (!resolution.model || !resolution.modelId) {
+		const diagnostics = formatRouteDiagnostics(resolution);
+		ctx.ui.notify(`Plan 路由不可用：${diagnostics || "没有找到已认证模型"}`, "warning");
+		return;
+	}
+
+	const previousModel = ctx.model;
+	const previousThinking = pi.getThinkingLevel();
+	const alreadySelected = fullModelId(previousModel) === resolution.modelId;
+	if (!alreadySelected) {
+		const switched = await pi.setModel(resolution.model);
+		if (!switched) {
+			ctx.ui.notify(`Plan 路由切换失败：${resolution.modelId}`, "warning");
+			return;
+		}
+	}
+	planRouteRestore = { previousModel, previousThinking, switchedModel: resolution.model };
+	pi.setThinkingLevel(resolution.thinking);
+	const diagnostics = formatRouteDiagnostics(resolution);
+	ctx.ui.notify(
+		`Plan 路由：plan → ${resolution.modelId}${diagnostics ? `；跳过 ${diagnostics}` : ""}`,
+		diagnostics ? "warning" : "info",
+	);
+}
+
+async function restorePlanRoute(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
+	const pending = planRouteRestore;
+	planRouteRestore = undefined;
+	if (!pending) return;
+
+	if (ctx.model && fullModelId(ctx.model) !== fullModelId(pending.switchedModel)) {
+		ctx.ui.notify("Plan 路由结束：检测到模型已被手动切换，跳过自动恢复。", "info");
+		return;
+	}
+	const restored = await pi.setModel(pending.previousModel);
+	if (!restored) {
+		ctx.ui.notify(`Plan 路由恢复失败，当前仍是 ${fullModelId(pending.switchedModel)}。`, "warning");
+		return;
+	}
+	pi.setThinkingLevel(pending.previousThinking);
+	ctx.ui.notify(`Plan 路由结束：已恢复 ${fullModelId(pending.previousModel)}`, "info");
+}
+
+async function enablePlanMode(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
+	const wasEnabled = planModeEnabled;
 	planModeEnabled = true;
 	executionMode = false;
 	todoItems = [];
 	enablePlanModeTools(pi);
+	if (!wasEnabled) await activatePlanRoute(pi, ctx);
 	ctx.ui.notify("Plan 模式已启用：写入工具和未审计的扩展工具已禁用。");
 	updateStatus(ctx);
 	persistState(pi);
 }
 
-function disablePlanMode(pi: ExtensionAPI, ctx: ExtensionContext): void {
+async function disablePlanMode(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
 	planModeEnabled = false;
 	executionMode = false;
 	todoItems = [];
 	restoreNormalModeTools(pi);
+	await restorePlanRoute(pi, ctx);
 	ctx.ui.notify("Plan 模式已禁用，完整权限已恢复。");
 	updateStatus(ctx);
 	persistState(pi);
@@ -152,7 +215,7 @@ function showPlanStatus(ctx: ExtensionContext): void {
 	}
 }
 
-function startExecution(pi: ExtensionAPI, ctx: ExtensionContext): void {
+async function startExecution(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
 	if (todoItems.length === 0) {
 		ctx.ui.notify("没有可执行的计划。先让模型在 Plan 模式下产出计划。", "warning");
 		return;
@@ -171,6 +234,7 @@ function startExecution(pi: ExtensionAPI, ctx: ExtensionContext): void {
 		executionMode = false;
 		todoItems = [];
 		restoreNormalModeTools(pi);
+		await restorePlanRoute(pi, ctx);
 		updateStatus(ctx);
 		persistState(pi);
 		return;
@@ -180,6 +244,7 @@ function startExecution(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	planModeEnabled = false;
 	executionMode = true;
 	restoreNormalModeTools(pi);
+	await restorePlanRoute(pi, ctx);
 	updateStatus(ctx);
 	persistState(pi);
 
@@ -211,21 +276,21 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	planController.status = (ctx) => showPlanStatus(ctx);
 	planController.execute = (ctx) => startExecution(pi, ctx);
 
-	function dispatchPlanCommand(ctx: ExtensionCommandContext, args: string): void {
+	async function dispatchPlanCommand(ctx: ExtensionCommandContext, args: string): Promise<void> {
 		const action = args.trim().split(/\s+/)[0] ?? "";
 		if (action === "on") {
-			enablePlanMode(pi, ctx);
+			await enablePlanMode(pi, ctx);
 		} else if (action === "off") {
-			disablePlanMode(pi, ctx);
+			await disablePlanMode(pi, ctx);
 		} else if (action === "status") {
 			showPlanStatus(ctx);
 		} else if (action === "execute") {
-			startExecution(pi, ctx);
+			await startExecution(pi, ctx);
 		} else if (action === "") {
 			if (planModeEnabled) {
-				disablePlanMode(pi, ctx);
+				await disablePlanMode(pi, ctx);
 			} else {
-				enablePlanMode(pi, ctx);
+				await enablePlanMode(pi, ctx);
 			}
 		} else {
 			ctx.ui.notify("用法: /plan [on|off|status|execute]", "info");
@@ -241,7 +306,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	pi.registerCommand("plan", {
 		description: "Plan 模式：on/off/status/execute",
 		handler: async (args, ctx) => {
-			dispatchPlanCommand(ctx, args);
+			await dispatchPlanCommand(ctx, args);
 		},
 	});
 
@@ -261,9 +326,9 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		description: "切换 Plan 模式",
 		handler: async (ctx) => {
 			if (planModeEnabled) {
-				disablePlanMode(pi, ctx);
+				await disablePlanMode(pi, ctx);
 			} else {
-				enablePlanMode(pi, ctx);
+				await enablePlanMode(pi, ctx);
 			}
 		},
 	});
@@ -396,7 +461,7 @@ After completing a step, include a [DONE:n] tag in your response.`,
 			"修改计划",
 		]);
 		if (choice?.startsWith("执行计划")) {
-			startExecution(pi, ctx);
+			await startExecution(pi, ctx);
 		} else if (choice === "修改计划") {
 			const refinement = await ctx.ui.editor("修改计划：", "");
 			if (refinement?.trim()) {
@@ -407,6 +472,9 @@ After completing a step, include a [DONE:n] tag in your response.`,
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		// A route restore belongs to the session in which Plan was entered. Never carry
+		// a Model object from an old session into the next one.
+		planRouteRestore = undefined;
 		if (pi.getFlag("plan") === true) {
 			planModeEnabled = true;
 		}

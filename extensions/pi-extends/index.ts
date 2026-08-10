@@ -21,6 +21,7 @@ import { reapplyCustomProviders } from "./providers.ts";
 import { setAPI } from "./runtime.ts";
 import { getConfig, reload } from "./store.ts";
 import { registerSubagentTool } from "./subagents.ts";
+import { runRouteCommand } from "./routes.ts";
 
 export const EXAMPLE_PATH = path.join(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -195,6 +196,12 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		handler: async (_args, ctx) => {
 			const { routesWizard } = await import("./routes.ts");
 			await routesWizard(ctx);
+		},
+	});
+	pi.registerCommand("route", {
+		description: "切换当前会话路由：/route <name>",
+		handler: async (args, ctx) => {
+			await runRouteCommand(pi, ctx, args);
 		},
 	});
 	pi.registerCommand("advisor", {

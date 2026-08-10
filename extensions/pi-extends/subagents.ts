@@ -5,7 +5,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import type { Message } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
-import type { PiExtendsConfig, RoleName } from "./config.ts";
+import { isValidRouteName, type PiExtendsConfig, type RoleName, type RouteName } from "./config.ts";
 import {
 	AGENT_STATUS_KEY,
 	formatAgentStatus,
@@ -16,6 +16,12 @@ import { icon } from "./icons.ts";
 import { formatDuration, sendNotification } from "./notify.ts";
 import { getPiInvocation, runPiChild } from "./pi-child.ts";
 import { PLAN_MODE_DISABLED_TOOLS, isPlanModeActive } from "./plan-mode.ts";
+import {
+	formatRouteDiagnostics,
+	inventoryFromContext,
+	resolveRuntimeRoute,
+	type RuntimeRouteResolution,
+} from "./route-runtime.ts";
 import { resolveRoleTools } from "./roles.ts";
 import { getAPI } from "./runtime.ts";
 import { getConfig } from "./store.ts";
@@ -77,6 +83,9 @@ interface SubagentDetails {
 }
 
 const SubagentParams = Type.Object({
+	route: Type.Optional(
+		Type.String({ description: "模型路由：default | smol | slow | plan | commit | vision | designer | task | advisor | tiny（默认 task）" }),
+	),
 	role: Type.Optional(
 		Type.String({ description: "角色：scout | planner | worker | reviewer（single 模式）" }),
 	),
@@ -181,10 +190,11 @@ export function buildChildArgs(
 	role: RoleName,
 	task: string,
 	promptFilePath: string | null,
+	route?: RuntimeRouteResolution,
 ): string[] {
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
-	const model = config.roles[role]?.model ?? config.currentModel.model;
-	const thinking = config.roles[role]?.thinking ?? config.currentModel.thinking;
+	const model = route?.modelId ?? config.roles[role]?.model ?? config.currentModel.model;
+	const thinking = route?.thinking ?? config.roles[role]?.thinking ?? config.currentModel.thinking;
 	if (model) args.push("--model", model);
 	if (thinking) args.push("--thinking", thinking);
 	// resolveRoleTools 而不是 config.roles[role]?.tools：加载链从 emptyBase() 起，
@@ -223,6 +233,7 @@ async function runSingleRole(
 	config: PiExtendsConfig,
 	role: string,
 	task: string,
+	route: RuntimeRouteResolution | undefined,
 	step: number | undefined,
 	signal: AbortSignal | undefined,
 	onUpdate: OnUpdateCallback | undefined,
@@ -249,7 +260,7 @@ async function runSingleRole(
 		messages: [],
 		stderr: "",
 		usage: emptyUsage(),
-		model: config.roles[roleName]?.model ?? config.currentModel.model,
+		model: route?.modelId ?? config.roles[roleName]?.model ?? config.currentModel.model,
 		step,
 	};
 
@@ -274,7 +285,7 @@ async function runSingleRole(
 		const tmp = await writePromptToTempFile(roleName, prompt);
 		tmpPromptDir = tmp.dir;
 		tmpPromptPath = tmp.filePath;
-		const args = buildChildArgs(config, roleName, task, tmpPromptPath);
+		const args = buildChildArgs(config, roleName, task, tmpPromptPath, route);
 
 		const processLine = (line: string) => {
 			const event = parseJsonlLine(line);
@@ -399,6 +410,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 		description: [
 			"将任务委托给隔离上下文的角色化子代理。",
 			"模式：single（role+task）、parallel（tasks 数组）、chain（串行，可用 {previous} 引用上一步结果）。",
+			"可选 route 选择模型路由；未指定时使用 task，并沿 fallback 降级。",
 			"角色：scout（只读侦察）、planner（只读规划）、worker（完整工具）、reviewer（只读审查）。",
 		].join(" "),
 		parameters: SubagentParams,
@@ -428,6 +440,36 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 					details: makeDetails("single")([]),
 				};
 			}
+
+			const requestedRoute = params.route ?? "task";
+			if (!isValidRouteName(requestedRoute)) {
+				return {
+					content: [{
+						type: "text",
+						text: `未知路由 "${requestedRoute}"。可用路由：default, smol, slow, plan, commit, vision, designer, task, advisor, tiny。`,
+					}],
+					details: makeDetails(hasChain ? "chain" : hasTasks ? "parallel" : "single")([]),
+					isError: true,
+				};
+			}
+
+			// Extension harnesses and very old Pi versions may not expose a registry. In that
+			// case retain the historical role/current-model behavior; real Pi always supplies
+			// the registry and therefore gets the full registered/authenticated fallback walk.
+			const runtimeRoute = ctx.modelRegistry
+				? resolveRuntimeRoute(config, requestedRoute as RouteName, inventoryFromContext(ctx))
+				: undefined;
+			if (runtimeRoute && (!runtimeRoute.model || !runtimeRoute.modelId)) {
+				const diagnostics = formatRouteDiagnostics(runtimeRoute);
+				return {
+					content: [{ type: "text", text: `子代理路由 ${requestedRoute} 不可用：${diagnostics || "没有找到已认证模型"}` }],
+					details: makeDetails(hasChain ? "chain" : hasTasks ? "parallel" : "single")([]),
+					isError: true,
+				};
+			}
+			const routeNotice = runtimeRoute?.modelId
+				? `路由 ${requestedRoute} → ${runtimeRoute.modelId}${formatRouteDiagnostics(runtimeRoute) ? `（跳过 ${formatRouteDiagnostics(runtimeRoute)}）` : ""}`
+				: "";
 
 			const requestedRoles = new Set<string>();
 			if (params.chain) for (const step of params.chain) requestedRoles.add(step.role);
@@ -474,6 +516,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 						config,
 						step.role,
 						taskWithContext,
+						runtimeRoute,
 						i + 1,
 						signal,
 						chainUpdate,
@@ -496,7 +539,10 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 				}
 				const last = results[results.length - 1];
 				return {
-					content: [{ type: "text", text: getFinalOutput(last?.messages ?? []) || "(no output)" }],
+					content: [{
+						type: "text",
+						text: `${routeNotice ? `${routeNotice}\n\n` : ""}${getFinalOutput(last?.messages ?? []) || "(no output)"}`,
+					}],
 					details: makeDetails("chain")(results),
 				};
 			}
@@ -543,6 +589,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 							config,
 							t.role,
 							t.task,
+							runtimeRoute,
 							undefined,
 							signal,
 							(partial) => {
@@ -570,7 +617,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 					content: [
 						{
 							type: "text",
-							text: `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n---\n\n")}`,
+							text: `${routeNotice ? `${routeNotice}\n\n` : ""}Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n---\n\n")}`,
 						},
 					],
 					details: makeDetails("parallel")(results),
@@ -583,6 +630,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 					config,
 					params.role,
 					params.task,
+					runtimeRoute,
 					undefined,
 					signal,
 					onUpdate as OnUpdateCallback | undefined,
@@ -596,7 +644,10 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 					};
 				}
 				return {
-					content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
+					content: [{
+						type: "text",
+						text: `${routeNotice ? `${routeNotice}\n\n` : ""}${getFinalOutput(result.messages) || "(no output)"}`,
+					}],
 					details: makeDetails("single")([result]),
 				};
 			}
@@ -608,8 +659,9 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 		},
 
 		renderCall(args: SubagentParams) {
+			const routeLabel = args.route ? ` [${args.route}]` : " [task]";
 			if (args.chain && args.chain.length > 0) {
-				let text = `subagent chain (${args.chain.length} steps)`;
+				let text = `subagent chain (${args.chain.length} steps)${routeLabel}`;
 				for (const step of args.chain.slice(0, 3)) {
 					const preview = step.task.replace(/\{previous\}/g, "").trim();
 					text += `\n  ${step.role}: ${preview.length > 40 ? preview.slice(0, 40) + "..." : preview}`;
@@ -617,7 +669,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 				return new Text(text, 0, 0);
 			}
 			if (args.tasks && args.tasks.length > 0) {
-				let text = `subagent parallel (${args.tasks.length} tasks)`;
+				let text = `subagent parallel (${args.tasks.length} tasks)${routeLabel}`;
 				for (const t of args.tasks.slice(0, 3)) {
 					text += `\n  ${t.role}: ${t.task.length > 40 ? t.task.slice(0, 40) + "..." : t.task}`;
 				}
@@ -628,7 +680,7 @@ export function registerSubagentTool(pi: ExtensionAPI): void {
 					? args.task.slice(0, 60) + "..."
 					: args.task
 				: "...";
-			return new Text(`subagent ${args.role || "..."}\n  ${preview}`, 0, 0);
+			return new Text(`subagent ${args.role || "..."}${routeLabel}\n  ${preview}`, 0, 0);
 		},
 
 		renderResult(result, options) {

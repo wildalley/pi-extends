@@ -1,6 +1,13 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 import {
+	formatRouteDiagnostics,
+	fullModelId,
+	inventoryFromContext,
+	resolveRuntimeRoute,
+	type RuntimeRouteResolution,
+} from "./route-runtime.ts";
+import {
 	resolveRoute,
 	type PiExtendsConfig,
 	type ResolvedRoute,
@@ -14,6 +21,10 @@ export interface VisionRouteResolution {
 	model?: Model<any>;
 }
 
+interface VisionRuntimeResolution extends VisionRouteResolution {
+	resolution: RuntimeRouteResolution;
+}
+
 interface RestoreState {
 	previousModel: Model<any>;
 	previousThinking?: ThinkingLevel;
@@ -21,7 +32,7 @@ interface RestoreState {
 }
 
 export function modelId(model: Pick<Model<any>, "provider" | "id">): string {
-	return `${model.provider}/${model.id}`;
+	return fullModelId(model);
 }
 
 export function supportsImages(model: Pick<Model<any>, "input"> | undefined): boolean {
@@ -31,16 +42,46 @@ export function supportsImages(model: Pick<Model<any>, "input"> | undefined): bo
 export function resolveVisionModel(
 	config: PiExtendsConfig,
 	models: readonly Model<any>[],
+	available: readonly Model<any>[] = models,
+	active?: Model<any>,
 ): VisionRouteResolution {
+	const resolved = resolveVisionRuntime(config, models, available, active);
+	return { route: resolved.route, model: resolved.model };
+}
+
+function resolveVisionRuntime(
+	config: PiExtendsConfig,
+	models: readonly Model<any>[],
+	available: readonly Model<any>[],
+	active?: Model<any>,
+): VisionRuntimeResolution {
 	const route = resolveRoute(config, "vision");
+	const resolution = resolveRuntimeRoute(
+		config,
+		"vision",
+		{ all: models, available, active },
+		{ require: supportsImages, requireLabel: "需要 image 输入" },
+	);
 	return {
 		route,
-		model: models.find((candidate) => modelId(candidate) === route.model),
+		resolution,
+		model: resolution.model,
 	};
 }
 
-function notifyUnavailable(ctx: ExtensionContext, route: ResolvedRoute, reason: string): void {
-	ctx.ui.notify(`自动视觉路由不可用：${reason}（vision → ${route.model}）`, "warning");
+function notifyUnavailable(ctx: ExtensionContext, resolution: RuntimeRouteResolution): void {
+	const diagnostics = formatRouteDiagnostics(resolution);
+	ctx.ui.notify(
+		`自动视觉路由不可用：${diagnostics || "没有找到支持 image 输入的已认证模型"}`,
+		"warning",
+	);
+}
+
+function notifyFallback(ctx: ExtensionContext, resolution: RuntimeRouteResolution): void {
+	const diagnostics = formatRouteDiagnostics(resolution);
+	if (diagnostics && resolution.modelId) {
+		ctx.ui.notify(`自动视觉路由已降级：vision → ${resolution.modelId}；跳过 ${diagnostics}`, "warning");
+	}
 }
 
 /**
@@ -63,15 +104,13 @@ export function registerAutoVisionRouting(pi: ExtensionAPI): void {
 		}
 
 		const config = getConfig(ctx.cwd, ctx.isProjectTrusted());
-		const resolved = resolveVisionModel(config, ctx.modelRegistry.getAll());
+		const inventory = inventoryFromContext(ctx);
+		const resolved = resolveVisionRuntime(config, inventory.all, inventory.available, inventory.active);
 		if (!resolved.model) {
-			notifyUnavailable(ctx, resolved.route, "模型未注册");
+			notifyUnavailable(ctx, resolved.resolution);
 			return { action: "continue" };
 		}
-		if (!supportsImages(resolved.model)) {
-			notifyUnavailable(ctx, resolved.route, "模型不支持 image 输入");
-			return { action: "continue" };
-		}
+		notifyFallback(ctx, resolved.resolution);
 
 		// ultrathink 已经由 keywords handler 临时提升并负责恢复；此时自动视觉
 		// 路由只切模型，不能再接管 thinking 的恢复顺序。
@@ -80,7 +119,10 @@ export function registerAutoVisionRouting(pi: ExtensionAPI): void {
 		const previousThinking = ultrathinkActive ? undefined : pi.getThinkingLevel();
 		const switched = await pi.setModel(resolved.model);
 		if (!switched) {
-			notifyUnavailable(ctx, resolved.route, "模型认证不可用");
+			ctx.ui.notify(
+				`自动视觉路由切换失败：${resolved.resolution.modelId ?? modelId(resolved.model)}`,
+				"warning",
+			);
 			return { action: "continue" };
 		}
 
@@ -90,7 +132,7 @@ export function registerAutoVisionRouting(pi: ExtensionAPI): void {
 			switchedModel: resolved.model,
 		};
 		if (previousThinking !== undefined) {
-			pi.setThinkingLevel(resolved.route.thinking);
+			pi.setThinkingLevel(resolved.resolution.thinking);
 		}
 		ctx.ui.notify(`图片输入：临时切换到 vision → ${modelId(resolved.model)}`, "info");
 		return { action: "continue" };

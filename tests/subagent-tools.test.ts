@@ -9,6 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { emptyBase } from "../extensions/pi-extends/config.ts";
 import { buildChildArgs, roleWriteTools } from "../extensions/pi-extends/subagents.ts";
+import { resolveRuntimeRoute } from "../extensions/pi-extends/route-runtime.ts";
 
 /** 取 --tools 后面那个值；没传 --tools 返回 undefined。 */
 function toolsOf(args: string[]): string | undefined {
@@ -33,6 +34,22 @@ test("用户显式配置的工具集优先于默认集", () => {
 	const config = emptyBase();
 	config.roles.scout = { tools: ["read"] };
 	assert.equal(toolsOf(buildChildArgs(config, "scout", "查一下", null)), "read");
+});
+
+test("子代理 route 选择覆盖角色模型并沿 task 路由传入子进程", () => {
+	const config = emptyBase();
+	config.currentModel = { model: "vendor/current", thinking: "high" };
+	config.routes.task = { model: "vendor/task", thinking: "low" };
+	config.roles.scout = { model: "vendor/role", thinking: "off" };
+	const taskModel: any = { provider: "vendor", id: "task", input: ["text"] };
+	const route = resolveRuntimeRoute(config, "task", {
+		all: [taskModel],
+		available: [taskModel],
+	});
+	const args = buildChildArgs(config, "scout", "查一下", null, route);
+
+	assert.equal(args[args.indexOf("--model") + 1], "vendor/task");
+	assert.equal(args[args.indexOf("--thinking") + 1], "low");
 });
 
 test("plan 模式关卡：只读角色在默认配置下没有写权限", () => {

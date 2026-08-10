@@ -32,3 +32,14 @@ test("vision 路由模型未注册时返回空模型", () => {
 	const result = resolveVisionModel(config, []);
 	assert.equal(result.model, undefined);
 });
+
+test("vision 解析跳过不支持 image 的首选模型并选择回退模型", () => {
+	const config = defaultConfig();
+	config.routes.vision = { model: "vendor/text", fallback: ["default"] };
+	config.routes.default = { model: "vendor/vision", thinking: "low" };
+	const text = model("vendor", "text", ["text"]);
+	const vision = model("vendor", "vision", ["text", "image"]);
+	const result = resolveVisionModel(config, [text, vision], [text, vision]);
+
+	assert.equal(result.model, vision);
+});

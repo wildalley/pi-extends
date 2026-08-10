@@ -12,7 +12,7 @@
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Component } from "@earendil-works/pi-tui";
-import { resolveRoute, type AdvisorSeverity, type PiExtendsConfig } from "./config.ts";
+import { type AdvisorSeverity, type PiExtendsConfig } from "./config.ts";
 import {
 	filterNotes,
 	parseAdvisorOutput,
@@ -23,6 +23,7 @@ import {
 import { editConfig } from "./config-ui.ts";
 import { sendNotification } from "./notify.ts";
 import { runPiChild } from "./pi-child.ts";
+import { formatRouteDiagnostics, inventoryFromContext, resolveRuntimeRoute } from "./route-runtime.ts";
 import { getConfig } from "./store.ts";
 
 const CUSTOM_TYPE = "pi-extends-advisor";
@@ -137,7 +138,18 @@ async function runAdvisor(
 	excerpt: string,
 	signal: AbortSignal | undefined,
 ): Promise<AdvisorNote[]> {
-	const route = resolveRoute(config, "advisor");
+	const route = resolveRuntimeRoute(config, "advisor", inventoryFromContext(ctx));
+	const diagnostics = formatRouteDiagnostics(route);
+	if (!route.model || !route.modelId) {
+		ctx.ui.notify(
+			`Advisor 路由不可用：${diagnostics || "没有找到已认证模型"}`,
+			"warning",
+		);
+		return [];
+	}
+	if (diagnostics) {
+		ctx.ui.notify(`Advisor 路由已降级：advisor → ${route.modelId}；跳过 ${diagnostics}`, "warning");
+	}
 	// 递归防护通过子进程 env 传递，而不是改 process.env —— 后者是进程全局状态，
 	// 并行的子代理会互相覆盖，且 finally 里的恢复会和其他 in-flight 子进程打架。
 	const result = await runPiChild({
@@ -146,7 +158,7 @@ async function runAdvisor(
 			"--no-session",
 			"-ne",
 			"--model",
-			route.model,
+			route.modelId,
 			"--thinking",
 			route.thinking,
 			"--tools",

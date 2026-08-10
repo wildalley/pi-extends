@@ -9,6 +9,12 @@ import {
 	sanitizeConfig,
 	type PiExtendsConfig,
 } from "../extensions/pi-extends/config.ts";
+import { formatRouteDiagnostics, resolveRuntimeRoute } from "../extensions/pi-extends/route-runtime.ts";
+import { switchToRoute } from "../extensions/pi-extends/routes.ts";
+
+function model(provider: string, id: string, input: ("text" | "image")[] = ["text"]): any {
+	return { provider, id, input };
+}
 
 function withRoutes(routes: PiExtendsConfig["routes"]): PiExtendsConfig {
 	return { ...defaultConfig(), routes };
@@ -71,6 +77,81 @@ test("resolveRoute 遇到环不会死循环", () => {
 	const resolved = resolveRoute(config, "smol");
 	assert.equal(resolved.route, null);
 	assert.equal(resolved.model, config.currentModel.model);
+});
+
+test("运行时路由跳过未注册和未认证模型并继续 fallback", () => {
+	const config = withRoutes({
+		plan: { model: "missing/plan", thinking: "high", fallback: ["slow", "default"] },
+		slow: { model: "vendor/slow" },
+		default: { model: "vendor/default" },
+	});
+	const slow = model("vendor", "slow");
+	const fallback = model("vendor", "default");
+	const resolved = resolveRuntimeRoute(config, "plan", {
+		all: [slow, fallback],
+		available: [fallback],
+	});
+	assert.equal(resolved.modelId, "vendor/default");
+	assert.equal(resolved.source, "default");
+	assert.equal(resolved.thinking, "high");
+	assert.deepEqual(resolved.attempts.map((attempt) => attempt.status), [
+		"unregistered",
+		"unauthenticated",
+		"selected",
+	]);
+	assert.match(formatRouteDiagnostics(resolved), /未注册/);
+	assert.match(formatRouteDiagnostics(resolved), /未认证/);
+});
+
+test("运行时路由按能力过滤并最终回退到当前活动模型", () => {
+	const config = withRoutes({ vision: { model: "vendor/text", fallback: [] } });
+	config.currentModel.model = "missing/current";
+	const text = model("vendor", "text");
+	const active = model("vendor", "vision", ["text", "image"]);
+	const resolved = resolveRuntimeRoute(
+		config,
+		"vision",
+		{ all: [text, active], available: [text, active], active },
+		{ require: (candidate) => candidate.input.includes("image"), requireLabel: "需要 image 输入" },
+	);
+	assert.equal(resolved.modelId, "vendor/vision");
+	assert.equal(resolved.source, "active");
+	assert.deepEqual(resolved.attempts.map((attempt) => attempt.status), [
+		"incompatible",
+		"unregistered",
+		"selected",
+	]);
+	assert.match(formatRouteDiagnostics(resolved), /能力不匹配/);
+});
+
+test("主会话路由消费者执行切换并输出降级诊断", async () => {
+	const config = withRoutes({
+		commit: { model: "missing/commit", fallback: ["smol"] },
+		smol: { model: "vendor/smol", thinking: "low" },
+	});
+	const target = model("vendor", "smol");
+	const notes: { text: string; level?: string }[] = [];
+	const ctx = {
+		modelRegistry: {
+			getAll: () => [target],
+			getAvailable: () => [target],
+		},
+		model: model("vendor", "active"),
+		ui: { notify: (text: string, level?: string) => notes.push({ text, level }) },
+	} as any;
+	const calls: string[] = [];
+	const pi = {
+		setModel: async (selected: any) => {
+			calls.push(`model:${selected.provider}/${selected.id}`);
+			return true;
+		},
+		setThinkingLevel: (level: string) => calls.push(`thinking:${level}`),
+	};
+
+	const resolved = await switchToRoute(pi, ctx, config, "commit");
+	assert.equal(resolved.modelId, "vendor/smol");
+	assert.deepEqual(calls, ["model:vendor/smol", "thinking:low"]);
+	assert.match(notes[0]?.text ?? "", /未注册/);
 });
 
 test("sanitizeConfig 丢弃非法路由、非法模型与自指回退", () => {

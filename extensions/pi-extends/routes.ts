@@ -6,7 +6,7 @@
  * 所以十条路由全空也能正常工作 —— 配置是渐进的，不是必填的。
  */
 
-import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
 	DEFAULT_ROUTE_FALLBACKS,
 	ROUTE_LABELS,
@@ -20,6 +20,7 @@ import {
 import { icon } from "./icons.ts";
 import { THINKING_HINTS, pickModelId, pickThinking, shortModel, thinkingTone } from "./pickers.ts";
 import { editConfig } from "./config-ui.ts";
+import { formatRouteDiagnostics, inventoryFromContext, resolveRuntimeRoute, type RuntimeRouteResolution } from "./route-runtime.ts";
 import { getConfig } from "./store.ts";
 import { kv, runMenu, sep, type MenuItem } from "./ui-kit.ts";
 
@@ -124,6 +125,59 @@ export async function routesWizard(ctx: ExtensionCommandContext): Promise<void> 
 
 function isRouteName(v: string): v is RouteName {
 	return (ROUTE_NAMES as readonly string[]).includes(v);
+}
+
+/**
+ * 在当前主会话应用一条运行时路由。配置页仍然只负责编辑静态配置，真正切换时统一走
+ * route-runtime，因而 `/route`、Plan 和自动视觉对不可用模型的判断保持一致。
+ */
+export async function switchToRoute(
+	pi: Pick<ExtensionAPI, "setModel" | "setThinkingLevel">,
+	ctx: Pick<ExtensionContext, "modelRegistry" | "model" | "ui">,
+	config: PiExtendsConfig,
+	route: RouteName,
+): Promise<RuntimeRouteResolution> {
+	const resolution = resolveRuntimeRoute(config, route, inventoryFromContext(ctx));
+	const diagnostics = formatRouteDiagnostics(resolution);
+	if (!resolution.model || !resolution.modelId) {
+		ctx.ui.notify(`路由 ${route} 不可用：${diagnostics || "没有找到已认证模型"}`, "warning");
+		return resolution;
+	}
+
+	const switched = await pi.setModel(resolution.model);
+	if (!switched) {
+		ctx.ui.notify(`路由 ${route} 切换失败：${resolution.modelId}`, "warning");
+		return resolution;
+	}
+	pi.setThinkingLevel(resolution.thinking);
+	ctx.ui.notify(
+		`已切换路由 ${route} → ${resolution.modelId}${diagnostics ? `；降级诊断：${diagnostics}` : ""}`,
+		diagnostics ? "warning" : "info",
+	);
+	return resolution;
+}
+
+/** `/route <name>`：只切当前会话，不改写持久化配置中的 currentModel。 */
+export async function runRouteCommand(
+	pi: Pick<ExtensionAPI, "setModel" | "setThinkingLevel">,
+	ctx: ExtensionCommandContext,
+	args: string,
+): Promise<void> {
+	const name = args.trim().split(/\s+/)[0] ?? "";
+	if (!isRouteName(name)) {
+		ctx.ui.notify(
+			name
+				? `未知路由 "${name}"。可用：${ROUTE_NAMES.join("/")}`
+				: `用法：/route <name>（可用：${ROUTE_NAMES.join("/")}）`,
+			"info",
+		);
+		return;
+	}
+	if (!ctx.modelRegistry) {
+		ctx.ui.notify("当前 Pi 没有可用的模型 registry，无法切换路由。", "warning");
+		return;
+	}
+	await switchToRoute(pi, ctx, getConfig(ctx.cwd, ctx.isProjectTrusted()), name);
 }
 
 async function mutateRoute(

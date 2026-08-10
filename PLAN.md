@@ -58,6 +58,7 @@
 - `/cockpit`
 - `/theme [名称]`
 - `/routes`
+- `/route <name>`
 - `/roles`
 - `/agents`
 - `/advisor [on|off]`
@@ -101,6 +102,7 @@ pi-extends/
 │       ├── plan-mode.ts
 │       ├── plan-utils.ts
 │       ├── routes.ts
+│       ├── route-runtime.ts
 │       ├── advisor.ts
 │       ├── advisor-parse.ts
 │       ├── keywords.ts
@@ -169,7 +171,8 @@ pi-extends/
 
 - `index.ts`：注册命令、工具、provider 和生命周期事件。
 - `cockpit.ts`：主控制台及各配置向导（含厂商、子代理、Goal、Plan、提示词、Advisor、关键词菜单）。
-- `config.ts`：读取、合并、校验和原子写入配置；路由解析与回退链。
+- `config.ts`：读取、合并、校验和原子写入配置；静态路由配置与回退链。
+- `route-runtime.ts`：把路由候选与 Pi registry 的 registered/available/active 模型合并，按能力过滤并保留降级诊断。
 - `config-ui.ts`：配置页（状态总览、生成、校验、作用域切换）。
 - `providers.ts`：内置厂商信息、自定义 provider 注册和模型发现。
 - `plans.ts`：coding plan 目录（订阅套餐 ↔ provider id ↔ 认证方式 ↔ 环境变量名）。
@@ -785,4 +788,3 @@ entries，跟真实重启一致。假 pi 有两处刻意与真实实现对齐，
 - 图形化工作流拖拽编辑器。
 - 无限轮次的自治代理。
 - 非 OpenAI/Anthropic 兼容协议的自定义流式实现。
-
