@@ -49,6 +49,15 @@ interface AdvisorState {
 }
 
 const state: AdvisorState = { enabled: undefined, shown: 0, running: false };
+let sessionGeneration = 0;
+
+/** 会话切换时清理临时覆盖，并让尚未结束的旧旁审结果失效。 */
+export function resetAdvisorSession(): void {
+	sessionGeneration++;
+	state.enabled = undefined;
+	state.shown = 0;
+	state.running = false;
+}
 
 export const advisorController = {
 	isEnabled(config: PiExtendsConfig): boolean {
@@ -200,12 +209,16 @@ export function registerAdvisor(pi: ExtensionAPI): void {
 		if (excerpt === "") {
 			return;
 		}
+		const runGeneration = sessionGeneration;
 		state.running = true;
 		try {
 			const notes = filterNotes(
 				await runAdvisor(ctx, config, excerpt, undefined),
 				config.advisor.minSeverity,
 			);
+			if (runGeneration !== sessionGeneration) {
+				return;
+			}
 			if (notes.length === 0) {
 				return;
 			}
@@ -233,7 +246,13 @@ export function registerAdvisor(pi: ExtensionAPI): void {
 				ctx.ui.notify(summarizeNotes(notes), "info");
 			}
 		} finally {
-			state.running = false;
+			if (runGeneration === sessionGeneration) {
+				state.running = false;
+			}
 		}
+	});
+
+	pi.on("session_start", () => {
+		resetAdvisorSession();
 	});
 }

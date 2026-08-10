@@ -46,6 +46,16 @@ test("lastCacheHit 取最后一轮的命中率", () => {
 		assistantEntry({ input: 50, output: 10, cacheRead: 50, cacheWrite: 0 }),
 	]);
 	assert.equal(totals.lastCacheHit, 50);
+	assert.equal(totals.cacheMetricsReported, true);
+});
+
+test("缓存字段缺失时记录为未知，不把缺失当作零命中", () => {
+	const totals = new UsageTotals();
+	totals.seedFrom([
+		assistantEntry({ input: 100, output: 10 }),
+		assistantEntry({ input: 200, output: 20 }),
+	]);
+	assert.equal(totals.cacheMetricsReported, false);
 });
 
 test("session_start 从 getBranch() 取 entries，不是 getEntries()", () => {

@@ -85,8 +85,8 @@ async function executing(): Promise<Harness> {
 	return h;
 }
 
-test("启用 plan 模式后写工具消失、只读工具补齐，其他工具留着", async () => {
-	const h = makeHarness({ tools: ["read", "bash", "edit", "write", "subagent"] });
+test("启用 plan 模式后只保留内置只读工具与已审计的扩展工具", async () => {
+	const h = makeHarness({ tools: ["read", "bash", "edit", "write", "subagent", "goal", "deploy"] });
 	await loadPlanMode(h);
 
 	await h.run("plan", "on");
@@ -96,13 +96,14 @@ test("启用 plan 模式后写工具消失、只读工具补齐，其他工具�
 	for (const name of ["read", "bash", "grep", "find", "ls"]) {
 		assert.ok(h.activeTools.includes(name), `只读工具 ${name} 应在场`);
 	}
-	// plan 模式只管 read/bash/edit/write/grep/find/ls，别的工具不该被顺手删掉。
-	assert.ok(h.activeTools.includes("subagent"), "非 plan 管理的工具应保留");
+	assert.ok(h.activeTools.includes("subagent"), "subagent 有自己的角色权限关卡，应保留");
+	assert.ok(h.activeTools.includes("goal"), "goal 只写 session 状态，应保留");
+	assert.ok(!h.activeTools.includes("deploy"), "未知扩展工具没有只读声明，默认应关闭");
 	assert.equal(h.lastEntry("plan-mode")?.enabled, true);
 });
 
 test("关闭 plan 模式恢复启用前的工具集，一个不多一个不少", async () => {
-	const before = ["read", "bash", "edit", "write", "subagent"];
+	const before = ["read", "bash", "edit", "write", "subagent", "goal", "deploy"];
 	const h = makeHarness({ tools: before });
 	await loadPlanMode(h);
 
@@ -173,6 +174,18 @@ test("[DONE:2] 只标记第 2 步", async () => {
 	);
 	assert.match(h.status.get("plan-mode") ?? "", /1\/3/);
 	assert.equal(checkedLines(h).length, 1);
+});
+
+test("重新执行部分完成的计划只发送未完成步骤，并从首个未完成步骤继续", async () => {
+	const h = await executing();
+	await h.emit("turn_end", { message: assistant("已完成第一步 [DONE:1]") });
+
+	await h.run("plan", "execute");
+	const exec = h.lastMessage("plan-mode-execute");
+	assert.ok(exec);
+	assert.doesNotMatch(exec?.content ?? "", /调整 a\.ts/);
+	assert.match(exec?.content ?? "", /剩余步骤：[\s\S]*调整 b\.ts/);
+	assert.match(exec?.content ?? "", /从第 2 步开始：调整 b\.ts/);
 });
 
 test("步骤没全完成时 agent_end 不清空执行态", async () => {

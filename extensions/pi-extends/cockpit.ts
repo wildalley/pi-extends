@@ -1724,8 +1724,9 @@ async function configMenu(ctx: ExtensionCommandContext): Promise<void> {
 }
 
 async function runConfigAction(ctx: ExtensionCommandContext, action: string): Promise<void> {
-	const { atomicWriteJson, resolveConfigPaths, schemaRefFrom } = await import("./config.ts");
+	const { generateExampleConfig, resolveConfigPaths } = await import("./config.ts");
 	const paths = resolveConfigPaths(ctx.cwd);
+	const trusted = ctx.isProjectTrusted();
 	if (action === "validate" || action === "reload") {
 		const result = reload(ctx.cwd, ctx.isProjectTrusted());
 		const ok = result.warnings.length === 0;
@@ -1750,19 +1751,28 @@ async function runConfigAction(ctx: ExtensionCommandContext, action: string): Pr
 		return;
 	}
 	if (action === "generate") {
-		const confirmed = await ctx.ui.confirm(
-			"写入示例配置",
-			`将覆盖 ${paths.projectPath}，当前项目配置会丢失。继续？`,
-		);
-		if (!confirmed) {
+		let result = await generateExampleConfig(ctx.cwd, trusted);
+		if (!result.ok && result.reason === "untrusted") {
+			ctx.ui.notify(`项目未信任，拒绝写入 ${result.path}。先执行 /trust 再生成。`, "warning");
 			return;
 		}
-		const { EXAMPLE_PATH } = await import("./index.ts");
-		const example = JSON.parse(fs.readFileSync(EXAMPLE_PATH, "utf8"));
-		example.$schema = schemaRefFrom(paths.projectPath);
-		await atomicWriteJson(paths.projectPath, example);
+		if (!result.ok && result.reason === "exists") {
+			const confirmed = await ctx.ui.confirm(
+				"覆盖现有配置？",
+				`${result.path} 已存在，当前项目配置会丢失。继续？`,
+			);
+			if (!confirmed) {
+				ctx.ui.notify("已取消，未覆盖现有配置。", "info");
+				return;
+			}
+			result = await generateExampleConfig(ctx.cwd, true, { force: true });
+		}
+		if (!result.ok) {
+			ctx.ui.notify(`生成配置失败：${result.path}`, "error");
+			return;
+		}
 		reload(ctx.cwd, ctx.isProjectTrusted());
-		ctx.ui.notify(`示例配置已写入 ${paths.projectPath}。`, "info");
+		ctx.ui.notify(`示例配置已写入 ${result.path}。`, "info");
 	}
 }
 

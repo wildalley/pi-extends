@@ -6,6 +6,7 @@ import * as path from "node:path";
 import {
 	atomicWriteJson,
 	defaultConfig,
+	generateExampleConfig,
 	isValidBaseUrl,
 	isValidEnvVarName,
 	isValidModelId,
@@ -232,6 +233,35 @@ test("atomicWriteJson 原子写入并保留内容", async () => {
 	assert.equal(parsed.hello, "world");
 	const leftovers = fs.readdirSync(path.dirname(target)).filter((f) => f.endsWith(".tmp"));
 	assert.equal(leftovers.length, 0);
+});
+
+test("生成项目配置遵守信任、存在性和 force 保护", async () => {
+	const untrustedDir = tmpDir();
+	const refused = await generateExampleConfig(untrustedDir, false);
+	assert.deepEqual(refused, {
+		ok: false,
+		reason: "untrusted",
+		path: path.join(untrustedDir, ".pi", "pi-extends.json"),
+	});
+	assert.equal(fs.existsSync(refused.path), false);
+
+	const dir = tmpDir();
+	const first = await generateExampleConfig(dir, true);
+	assert.equal(first.ok, true);
+	assert.equal(fs.existsSync(first.path), true);
+	const generated = JSON.parse(fs.readFileSync(first.path, "utf8"));
+	assert.equal(typeof generated.$schema, "string");
+
+	fs.writeFileSync(first.path, JSON.stringify({ version: 1, userValue: true }), "utf8");
+	const existing = await generateExampleConfig(dir, true);
+	assert.deepEqual(existing, { ok: false, reason: "exists", path: first.path });
+	assert.equal(JSON.parse(fs.readFileSync(first.path, "utf8")).userValue, true);
+
+	const forced = await generateExampleConfig(dir, true, { force: true });
+	assert.equal(forced.ok, true);
+	assert.equal(JSON.parse(fs.readFileSync(forced.path, "utf8")).userValue, undefined);
+	fs.rmSync(untrustedDir, { recursive: true, force: true });
+	fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test("icons 字段接受四套图标集，大小写与空格会归一化", () => {

@@ -1160,6 +1160,37 @@ export async function atomicWriteJson(filePath: string, data: unknown): Promise<
 	}
 }
 
+export type GenerateConfigResult =
+	| { ok: true; path: string }
+	| { ok: false; reason: "untrusted" | "exists"; path: string };
+
+/**
+ * 生成项目级示例配置的唯一写入入口。
+ *
+ * 生成配置会创建项目文件，因而必须先通过 Pi 的项目级信任检查；已有文件也不应
+ * 被一个看似无害的示例模板静默覆盖。TUI 确认和命令行 `--force` 都最终调用这里，
+ * 避免两条入口的保护策略漂移。
+ */
+export async function generateExampleConfig(
+	cwd: string,
+	trusted: boolean,
+	options: { force?: boolean } = {},
+): Promise<GenerateConfigResult> {
+	const { projectPath } = resolveConfigPaths(cwd);
+	if (!trusted) {
+		return { ok: false, reason: "untrusted", path: projectPath };
+	}
+	if (!options.force && fs.existsSync(projectPath)) {
+		return { ok: false, reason: "exists", path: projectPath };
+	}
+
+	const examplePath = path.join(packageRoot(), "templates", "pi-extends.example.json");
+	const example = JSON.parse(await fs.promises.readFile(examplePath, "utf8")) as Record<string, unknown>;
+	example.$schema = schemaRefFrom(projectPath);
+	await atomicWriteJson(projectPath, example);
+	return { ok: true, path: projectPath };
+}
+
 /** 本包根目录：config.ts 在 <root>/extensions/pi-extends/，往上两级。 */
 function packageRoot(): string {
 	return path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");

@@ -8,6 +8,12 @@ import { extractTodoItems, isSafeCommand, markCompletedSteps, type TodoItem } fr
 const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls"];
 const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write"];
 /**
+ * 扩展工具没有统一的只读能力声明，Plan 模式不能根据名字猜安全性。
+ * 这里只保留本扩展自己能审计的工具：subagent 会再次检查角色的实际工具集，
+ * goal 只写 session entry。其他未知工具默认关闭，退出 Plan 后由快照精确恢复。
+ */
+const PLAN_MODE_ALLOWED_EXTENSION_TOOLS = new Set(["subagent", "goal"]);
+/**
  * Plan 模式下被摘掉的工具。导出是给子代理那条路复用的：
  * 「plan 模式禁什么」只能有一份定义，否则改了这里忘了那里，
  * 两条路对「只读」的理解就会悄悄分叉。
@@ -61,7 +67,7 @@ function uniqueToolNames(toolNames: string[]): string[] {
 
 function getPlanModeTools(activeToolNames: string[]): string[] {
 	return uniqueToolNames([
-		...activeToolNames.filter((name) => !PLAN_MODE_DISABLED_TOOLS.has(name)),
+		...activeToolNames.filter((name) => PLAN_MODE_ALLOWED_EXTENSION_TOOLS.has(name)),
 		...PLAN_MODE_TOOLS,
 	]);
 }
@@ -122,7 +128,7 @@ function enablePlanMode(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	executionMode = false;
 	todoItems = [];
 	enablePlanModeTools(pi);
-	ctx.ui.notify("Plan 模式已启用：编辑与写入工具已禁用。");
+	ctx.ui.notify("Plan 模式已启用：写入工具和未审计的扩展工具已禁用。");
 	updateStatus(ctx);
 	persistState(pi);
 }
@@ -151,7 +157,25 @@ function startExecution(pi: ExtensionAPI, ctx: ExtensionContext): void {
 		ctx.ui.notify("没有可执行的计划。先让模型在 Plan 模式下产出计划。", "warning");
 		return;
 	}
-	const firstTodoItem = todoItems[0];
+	const remainingItems = todoItems.filter((item) => !item.completed);
+	if (remainingItems.length === 0) {
+		pi.sendMessage(
+			{
+				customType: "plan-complete",
+				content: `**Plan Complete!** ✓\n\n${todoItems.map((t) => `~~${t.text}~~`).join("\n")}`,
+				display: true,
+			},
+			{ triggerTurn: false },
+		);
+		planModeEnabled = false;
+		executionMode = false;
+		todoItems = [];
+		restoreNormalModeTools(pi);
+		updateStatus(ctx);
+		persistState(pi);
+		return;
+	}
+	const firstTodoItem = remainingItems[0];
 	if (!firstTodoItem) return;
 	planModeEnabled = false;
 	executionMode = true;
@@ -159,10 +183,10 @@ function startExecution(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	updateStatus(ctx);
 	persistState(pi);
 
-	const remainingList = todoItems.map((t) => `${t.step}. ${t.text}`).join("\n");
-	const todoListText = todoItems.map((t, i) => `${i + 1}. ☐ ${t.text}`).join("\n");
+	const remainingList = remainingItems.map((t) => `${t.step}. ${t.text}`).join("\n");
+	const todoListText = remainingItems.map((t) => `${t.step}. ☐ ${t.text}`).join("\n");
 	pi.sendMessage(
-		{ customType: "plan-todo-list", content: `**Plan Steps (${todoItems.length}):**\n\n${todoListText}`, display: true },
+		{ customType: "plan-todo-list", content: `**Plan Steps (${remainingItems.length}):**\n\n${todoListText}`, display: true },
 		{ deliverAs: "followUp" },
 	);
 	pi.sendMessage(
@@ -173,7 +197,7 @@ function startExecution(pi: ExtensionAPI, ctx: ExtensionContext): void {
 剩余步骤：
 ${remainingList}
 
-从第 1 步开始：${firstTodoItem.text}
+从第 ${firstTodoItem.step} 步开始：${firstTodoItem.text}
 每完成一步，在回答中包含 [DONE:n] 标记。`,
 			display: true,
 		},
@@ -286,7 +310,7 @@ You are in plan mode - a read-only exploration mode for safe code analysis.
 
 Restrictions:
 - Built-in edit and write tools are disabled
-- Other currently active tools remain available
+- Only audited extension tools remain available; unknown tools are disabled
 - Bash is restricted to an allowlist of read-only commands
 
 Create a detailed numbered plan under a "Plan:" header:

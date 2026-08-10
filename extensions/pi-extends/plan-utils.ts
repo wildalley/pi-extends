@@ -39,53 +39,44 @@ const DESTRUCTIVE_PATTERNS = [
 	/\b(vim?|nano|emacs|code|subl)\b/i,
 ];
 
-const SAFE_PATTERNS = [
-	/^\s*cat\b/,
-	/^\s*head\b/,
-	/^\s*tail\b/,
-	/^\s*less\b/,
-	/^\s*more\b/,
-	/^\s*grep\b/,
-	/^\s*find\b/,
-	/^\s*ls\b/,
-	/^\s*pwd\b/,
-	/^\s*echo\b/,
-	/^\s*printf\b/,
-	/^\s*wc\b/,
-	/^\s*sort\b/,
-	/^\s*uniq\b/,
-	/^\s*diff\b/,
-	/^\s*file\b/,
-	/^\s*stat\b/,
-	/^\s*du\b/,
-	/^\s*df\b/,
-	/^\s*tree\b/,
-	/^\s*which\b/,
-	/^\s*whereis\b/,
-	/^\s*type\b/,
-	/^\s*env\b/,
-	/^\s*printenv\b/,
-	/^\s*uname\b/,
-	/^\s*whoami\b/,
-	/^\s*id\b/,
-	/^\s*date\b/,
-	/^\s*cal\b/,
-	/^\s*uptime\b/,
-	/^\s*ps\b/,
-	/^\s*free\b/,
-	/^\s*git\s+(status|log|diff|show|branch|remote|config\s+--get)/i,
-	/^\s*git\s+ls-/i,
-	/^\s*npm\s+(list|ls|view|info|search|outdated|audit)/i,
-	/^\s*yarn\s+(list|info|why|audit)/i,
-	/^\s*node\s+--version/i,
-	/^\s*python3?\s+--version/i,
-	/^\s*jq\b/,
-	/^\s*sed\s+-n/i,
-	/^\s*rg\b/,
-	/^\s*fd\b/,
-	/^\s*bat\b/,
-	/^\s*eza\b/,
-];
+/**
+ * 参数本身不提供执行或输出文件能力的只读命令。
+ *
+ * `env`、`less`、`more` 不在这里：env 是任意命令包装器，less 能用 `-o` 写日志，
+ * 两个 pager 在无交互子进程里还容易挂住。带高风险参数的命令走下面各自的策略。
+ */
+const SIMPLE_READONLY_COMMANDS = new Set([
+	"cat",
+	"head",
+	"tail",
+	"grep",
+	"ls",
+	"pwd",
+	"echo",
+	"printf",
+	"wc",
+	"diff",
+	"file",
+	"stat",
+	"du",
+	"df",
+	"which",
+	"whereis",
+	"type",
+	"printenv",
+	"uname",
+	"whoami",
+	"id",
+	"date",
+	"cal",
+	"uptime",
+	"ps",
+	"free",
+	"jq",
+	"rg",
+	"bat",
+	"eza",
+]);
 
 /**
  * shell 元字符：出现即拒绝。
@@ -103,18 +94,203 @@ const SHELL_METACHARS = /[|&;<>`\n\r]|\$\(|\$\{/;
  * 单条命令自带的破坏性参数。
  * 这些命令在允许清单里，但特定参数会让它们产生写操作或执行子命令。
  */
-const DANGEROUS_ARGS: { pattern: RegExp; flags: RegExp }[] = [
-	// find 能删文件、能执行任意命令，完全不需要 shell 元字符。
-	{ pattern: /^\s*find\b/, flags: /\s-(delete|exec|execdir|ok|okdir|fls|fprint|fprintf|fputs)\b/ },
-	// sed 的 w/W 命令写文件，e 命令执行 shell；-i 原地改写。
-	{ pattern: /^\s*sed\b/, flags: /(^|\s)-[a-zA-Z]*i|\s-e\s|[;{]\s*[wWe]\s|\bw\s+\S/ },
-	// git config 除 --get 外可写配置；已由允许清单限制，这里兜底。
-	{ pattern: /^\s*git\s+config\b/, flags: /(?<!--get)\s+[a-z]+\.[a-z]+\s+\S/i },
-	// ps/env 带 -o 之类没问题，但 env VAR=x cmd 能借壳执行任意命令。
-	{ pattern: /^\s*env\b/, flags: /\s\S+=\S+/ },
-	// 解释器只允许查版本，-c/-e/-m 都是任意代码执行。
-	{ pattern: /^\s*(node|python3?|perl|ruby|php)\b/, flags: /\s-(c|e|m|exec)\b/ },
-];
+const FIND_SIDE_EFFECT_FLAGS = new Set([
+	"-delete",
+	"-exec",
+	"-execdir",
+	"-ok",
+	"-okdir",
+	"-fls",
+	"-fprint",
+	"-fprintf",
+	"-fputs",
+]);
+
+const GIT_READONLY_SUBCOMMANDS = new Set(["status", "log", "diff", "show", "ls-files", "ls-tree"]);
+const GIT_CONFIG_READ_ACTIONS = new Set(["--get", "--get-all", "--get-regexp", "--get-urlmatch"]);
+const GIT_DANGEROUS_READ_FLAGS = new Set(["--ext-diff", "--textconv", "--edit"]);
+
+/**
+ * 最小 shell words 解析器。
+ *
+ * 元字符已经在调用前整体拒绝，这里只需要正确处理引号与反斜杠，目的是让参数检查
+ * 看见真实的 argv。解析失败（例如引号没闭合）时返回 undefined，按不安全处理。
+ */
+function splitShellWords(command: string): string[] | undefined {
+	const words: string[] = [];
+	let current = "";
+	let quote: "'" | '"' | undefined;
+	let escaped = false;
+	let started = false;
+
+	for (const ch of command) {
+		if (escaped) {
+			current += ch;
+			escaped = false;
+			started = true;
+			continue;
+		}
+		if (ch === "\\" && quote !== "'") {
+			escaped = true;
+			started = true;
+			continue;
+		}
+		if (quote) {
+			if (ch === quote) {
+				quote = undefined;
+			} else {
+				current += ch;
+			}
+			started = true;
+			continue;
+		}
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			started = true;
+			continue;
+		}
+		if (/\s/.test(ch)) {
+			if (started) {
+				words.push(current);
+				current = "";
+				started = false;
+			}
+			continue;
+		}
+		current += ch;
+		started = true;
+	}
+
+	if (escaped || quote) {
+		return undefined;
+	}
+	if (started) {
+		words.push(current);
+	}
+	return words;
+}
+
+function hasOutputOption(args: string[]): boolean {
+	return args.some(
+		(arg) =>
+			arg === "-o" ||
+			arg.startsWith("--output=") ||
+			arg === "--output" ||
+			(/^-[^-]/.test(arg) && arg.slice(1).includes("o")),
+	);
+}
+
+function isSafeFind(args: string[]): boolean {
+	return !args.some((arg) => FIND_SIDE_EFFECT_FLAGS.has(arg.toLowerCase()));
+}
+
+function isSafeFd(args: string[]): boolean {
+	return !args.some((arg) => {
+		const lower = arg.toLowerCase();
+		return (
+			lower === "--exec" ||
+			lower.startsWith("--exec=") ||
+			lower === "--exec-batch" ||
+			lower.startsWith("--exec-batch=") ||
+			(/^-[^-]/.test(arg) && /[xX]/.test(arg.slice(1)))
+		);
+	});
+}
+
+function isSafeSed(args: string[]): boolean {
+	let index = 0;
+	let quiet = false;
+	while (index < args.length && args[index]?.startsWith("-")) {
+		const option = args[index];
+		if (option === "-n" || option === "--quiet" || option === "--silent") {
+			quiet = true;
+			index++;
+			continue;
+		}
+		return false;
+	}
+	if (!quiet) {
+		return false;
+	}
+	const script = args[index];
+	if (!script) {
+		return false;
+	}
+	// 只允许按行号查看。复杂 sed 表达式可用 rg/read 代替，不能拿安全边界赌解析完整性。
+	if (!/^(?:\d+|\$)?(?:,(?:\d+|\$))?[pPl=]$/.test(script)) {
+		return false;
+	}
+	return args.slice(index + 1).every((arg) => arg !== "" && !arg.startsWith("-"));
+}
+
+function isSafeGit(args: string[]): boolean {
+	const subcommand = args[0]?.toLowerCase();
+	if (!subcommand) {
+		return false;
+	}
+	if (subcommand === "remote") {
+		return args.length === 1 || (args.length === 2 && args[1] === "-v");
+	}
+	if (subcommand === "config") {
+		const action = args[1]?.toLowerCase();
+		return action !== undefined && GIT_CONFIG_READ_ACTIONS.has(action) && !args.slice(2).includes("--edit");
+	}
+	if (!GIT_READONLY_SUBCOMMANDS.has(subcommand)) {
+		return false;
+	}
+	const rest = args.slice(1).map((arg) => arg.toLowerCase());
+	if (rest.some((arg) => GIT_DANGEROUS_READ_FLAGS.has(arg))) {
+		return false;
+	}
+	return !hasOutputOption(rest);
+}
+
+function isSafePackageQuery(command: string, args: string[]): boolean {
+	const subcommand = args[0]?.toLowerCase();
+	if (command === "npm") {
+		if (!subcommand || !new Set(["list", "ls", "view", "info", "search", "outdated", "audit"]).has(subcommand)) {
+			return false;
+		}
+		return subcommand !== "audit" || !args.slice(1).some((arg) => arg === "fix" || arg === "--fix");
+	}
+	if (command === "yarn") {
+		return subcommand !== undefined && new Set(["list", "info", "why", "audit"]).has(subcommand);
+	}
+	return false;
+}
+
+function isSafeParsedCommand(words: string[]): boolean {
+	const [rawCommand, ...args] = words;
+	const command = rawCommand?.toLowerCase();
+	if (!command) {
+		return false;
+	}
+	if (SIMPLE_READONLY_COMMANDS.has(command)) {
+		return true;
+	}
+	if (command === "find") {
+		return isSafeFind(args);
+	}
+	if (command === "fd") {
+		return isSafeFd(args);
+	}
+	if (command === "sed") {
+		return isSafeSed(args);
+	}
+	if (command === "sort" || command === "uniq" || command === "tree") {
+		return !hasOutputOption(args);
+	}
+	if (command === "git") {
+		return isSafeGit(args);
+	}
+	if (command === "npm" || command === "yarn") {
+		return isSafePackageQuery(command, args);
+	}
+	if (command === "node" || command === "python" || command === "python3") {
+		return args.length === 1 && (args[0] === "--version" || args[0] === "-V");
+	}
+	return false;
+}
 
 /**
  * 判断命令在 plan 模式下是否安全（只读）。
@@ -134,15 +310,8 @@ export function isSafeCommand(command: string): boolean {
 	if (DESTRUCTIVE_PATTERNS.some((p) => p.test(command))) {
 		return false;
 	}
-	if (!SAFE_PATTERNS.some((p) => p.test(command))) {
-		return false;
-	}
-	for (const { pattern, flags } of DANGEROUS_ARGS) {
-		if (pattern.test(command) && flags.test(command)) {
-			return false;
-		}
-	}
-	return true;
+	const words = splitShellWords(command);
+	return words !== undefined && isSafeParsedCommand(words);
 }
 
 export interface TodoItem {

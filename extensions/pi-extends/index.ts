@@ -1,9 +1,9 @@
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { atomicWriteJson, resolveConfigPaths, sanitizeConfig, schemaRefFrom } from "./config.ts";
+import { generateExampleConfig, resolveConfigPaths, sanitizeConfig } from "./config.ts";
 import { registerAdvisor } from "./advisor.ts";
+import { registerAutoVisionRouting } from "./auto-vision.ts";
 import {
 	AGENT_STATUS_KEY,
 	getAgentStatus,
@@ -44,11 +44,33 @@ async function cmdConfig(args: string, ctx: ExtensionCommandContext): Promise<vo
 		return;
 	}
 	if (action === "generate") {
-		const example = JSON.parse(fs.readFileSync(EXAMPLE_PATH, "utf8"));
-		example.$schema = schemaRefFrom(paths.projectPath);
-		await atomicWriteJson(paths.projectPath, example);
+		const result = await generateExampleConfig(ctx.cwd, ctx.isProjectTrusted());
+		if (!result.ok) {
+			ctx.ui.notify(
+				result.reason === "untrusted"
+					? `项目未信任，拒绝写入 ${result.path}。先执行 /trust 再生成。`
+					: `${result.path} 已存在，未覆盖。需要显式使用 /config generate --force。`,
+				"warning",
+			);
+			return;
+		}
 		reload(ctx.cwd, ctx.isProjectTrusted());
-		ctx.ui.notify(`已写入 ${paths.projectPath}`, "info");
+		ctx.ui.notify(`已写入 ${result.path}`, "info");
+		return;
+	}
+	if (action === "generate --force") {
+		const result = await generateExampleConfig(ctx.cwd, ctx.isProjectTrusted(), { force: true });
+		if (!result.ok) {
+			ctx.ui.notify(
+				result.reason === "untrusted"
+					? `项目未信任，拒绝写入 ${result.path}。先执行 /trust 再生成。`
+					: `无法生成配置：${result.path} 已存在且未能覆盖。`,
+				"warning",
+			);
+			return;
+		}
+		reload(ctx.cwd, ctx.isProjectTrusted());
+		ctx.ui.notify(`已强制写入 ${result.path}`, "info");
 		return;
 	}
 	if (action === "validate") {
@@ -149,6 +171,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	registerKeywords(pi);
 	// 注册在 keywords 之后：两者都改写同一条输入，而自动分工要先看到关键词有没有命中。
 	registerOrchestration(pi);
+	registerAutoVisionRouting(pi);
 	registerNotifications(pi);
 
 	pi.registerCommand("cockpit", {

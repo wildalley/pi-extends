@@ -7,7 +7,7 @@
 - **Cockpit 主控制台**：`/cockpit` 打开一张卡片式面板——顶部实时显示模型 / 运行态 / 上下文占用，主体按「外观 · 模型 · 工作流 · 自动化 · 系统」分栏，每项右侧直接给出当前值。`Tab`/`←→` 切栏、数字与字母热键直达（跨栏有效，按到别栏的键会自动切过去）、`/` 模糊搜索（跨全部栏）、光标记忆，主题与模型选择器在移动光标时即时预览。支持鼠标：点行移光标、再点确认，点 tab 名切栏，滚轮上下移动。
 - **Coding plan 目录**：`/cockpit → 模型 → Coding Plan 与 API` 列出主流厂商的编码套餐与 API（Claude、ChatGPT、Kimi、GLM/智谱、OpenCode、Copilot、Grok、Qwen、DeepSeek、MiniMax、Groq、OpenRouter……），标出每一条对应的 provider id、能不能用订阅登录、环境变量叫什么，可直接填入 `/login`。这些厂商由 Pi 内置目录维护，本扩展不重复注册，只补「我买的套餐对应哪个 id」这段信息；表里没有的用自定义厂商兜底。
 - **主题**：内置 `pi-carbon`（深色工业）、`pi-paper`（浅色纸张）、`pi-contrast`（高对比）、`pi-sakura`（樱色马卡龙）、`pi-terminal`（荧光绿 CRT），全部通过 WCAG 对比度校验；`/theme [名称]` 快速切换或打开选择器。
-- **Cometix footer**：单行底部状态栏显示模型+thinking、当前目录、Git 分支与状态、上下文占比、token 用量、费用、任务时长与 TPS，颜色跟随主题；`/footer [tps]` 开关。有缓存命中时显示 `CH92.3%`；跑满 3 轮、累计重发超过 20 万输入 token 却一次都没命中，则把 `CH0%` 标红并提示一次 —— 没有提示缓存时每轮都在全价重发整个上下文，花费按轮数平方增长，而这种故障原本表现为「footer 上什么都不显示」。
+- **Cometix footer**：单行底部状态栏显示模型+thinking、当前目录、Git 分支与状态、上下文占比、token 用量、费用、任务时长与 TPS，颜色跟随主题；`/footer [tps]` 开关。有缓存命中时显示 `CH92.3%`；上游明确返回缓存字段、跑满 3 轮且累计重发超过 20 万输入 token 却一次都没命中时显示红色 `CH0%`。第三方中转若省略 `cacheRead/cacheWrite`，则显示红色 `CH?`，只提示“指标未上报或尚未命中”，不会把漏报断言成未命中。
 - **模型与角色**：为 Scout / Planner / Worker / Reviewer 四个角色分别绑定模型、thinking level 与工具权限，未指定时回退主模型。
 - **路由角色**：把「用途」映射到模型——写提交信息用便宜模型、攻坚难题用慢模型、读图用多模态模型。`default / smol / slow / plan / commit / vision / designer / task / advisor / tiny` 十条路由，未配置的沿回退链落到主模型，全部为空也能正常工作。
 - **Advisor 旁审**：每轮结束后由第二个模型在独立上下文里只读复查，把 `aside / concern / blocker` 等级的遗漏贴回转录区；转录区的意见始终不画框（那是聊天流，不是面板），不受 `border` 影响；走 `-ne` 子进程，绝不触发新一轮。
@@ -151,14 +151,16 @@ pi remove /path/to/pi-extends
 也可直接使用工作流提示词：`/scout-and-plan <需求>`、`/implement <需求>`、`/implement-and-review <需求>`。
 
 粘贴图片是 Pi 自带的能力，不需要本扩展：输入框里直接 `Ctrl+V`（Windows 终端用
-`Alt+V`），支持的终端里也可以把图片拖进去。读图建议把 `vision` 路由指向多模态模型。
+`Alt+V`），支持的终端里也可以把图片拖进去。若当前模型不支持图片，扩展会把本轮临时切到
+`vision` 路由，回合结束后恢复原模型；因此请把 `vision` 路由指向多模态模型。
 
 ## 配置
 
 配置文件为 `.pi/pi-extends.json`（项目级）与 `~/.pi/agent/pi-extends.json`（用户级），
 项目级按字段覆盖用户级。示例见 `templates/pi-extends.example.json`，JSON Schema 见 `schemas/pi-extends.schema.json`。
 
-`/config generate` 写文件时会把 `$schema` 算成从 `.pi/` 指向包内 schema 的相对路径，
+`/config generate` 写文件时会把 `$schema` 算成从 `.pi/` 指向包内 schema 的相对路径；
+项目未信任时拒绝写入，已有文件默认不覆盖，确需覆盖时使用 `/config generate --force`。
 编辑器就能补全和校验字段。这个值不能写死：schema 在包里（项目级安装时是
 `node_modules/pi-extends/schemas/`），配置在 `.pi/`，两者的相对关系取决于装到哪。
 指不到的话编辑器不报错，只是静默不校验 —— 所以由 `tests/config.test.ts` 断言那个
@@ -192,6 +194,11 @@ pi remove /path/to/pi-extends
 ```
 
 配置中只保存 `$MY_LLM_API_KEY` 这类环境变量引用，绝不写入密钥明文。
+
+缓存说明：扩展不额外实现一层代理缓存，也不会替第三方中转自动添加 prompt-cache
+请求头或 TTL。缓存是否生效由实际 provider/中转协议决定；Pi 返回完整
+`cacheRead/cacheWrite` 时 footer 计算命中率，字段缺失时标为 `CH?`。因此“中转支持缓存但
+没有回传指标”与“中转没有缓存”目前只能通过中转控制台或请求日志进一步确认。
 
 ## 开发
 

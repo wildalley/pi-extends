@@ -47,6 +47,7 @@ const BLOCKED = [
 	// sed 写文件 / 原地改写 / 执行
 	"sed -i 's/a/b/' file.ts",
 	"sed -n 'w /tmp/out' file.ts",
+	"sed -n '1,5e id' file.ts",
 	// 解释器任意代码执行
 	"node -e \"require('fs').writeFileSync('x','')\"",
 	"python3 -c \"open('f','w').write('')\"",
@@ -54,6 +55,19 @@ const BLOCKED = [
 	"perl -e 'unlink \"f\"'",
 	// env 借壳
 	"env FOO=bar rm -rf /tmp/x",
+	"env python3 -c 'open(\"/tmp/plan-bypass\",\"w\").write(\"x\")'",
+	"env sh -c id",
+	// 只读命令的写文件/执行参数
+	"git diff --output=out.txt",
+	"git show --output out.txt HEAD",
+	"git diff --ext-diff",
+	"git diff --textconv",
+	"git branch new-branch",
+	"git remote add origin https://example.com/repo.git",
+	"sort -o out.txt input.txt",
+	"tree -o out.txt",
+	"fd pattern -x sh -c id",
+	"npm audit fix",
 	// 直接的破坏性命令
 	"rm -rf node_modules",
 	"git commit -m 'x'",
@@ -95,4 +109,10 @@ test("非字符串输入不会抛异常且判为不安全", () => {
 	assert.equal(isSafeCommand(undefined as unknown as string), false);
 	assert.equal(isSafeCommand(null as unknown as string), false);
 	assert.equal(isSafeCommand(123 as unknown as string), false);
+});
+
+test("引号不完整或交互式包装器不会被当成只读命令", () => {
+	assert.equal(isSafeCommand("cat 'unterminated"), false);
+	assert.equal(isSafeCommand("less README.md"), false);
+	assert.equal(isSafeCommand("more README.md"), false);
 });

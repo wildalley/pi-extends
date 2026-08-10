@@ -91,7 +91,7 @@ export const NO_CACHE_WARN_TURNS = 3;
 
 export interface CacheHitView {
 	text: string;
-	/** true 表示这是告警（一次都没命中），渲染成 error 色。 */
+	/** true 表示这是需要关注的状态（零命中或指标未知），渲染成 error 色。 */
 	warn: boolean;
 }
 
@@ -102,7 +102,18 @@ export function formatCacheHit(t: {
 	cacheRead: number;
 	cacheWrite: number;
 	lastCacheHit?: number;
+	/** false 表示 provider/中转没有完整返回 cacheRead/cacheWrite。 */
+	cacheMetricsReported?: boolean;
 }): CacheHitView | undefined {
+	// 直接调用这个纯函数的旧消费者没有传能力字段时，沿用旧的“字段存在”语义；
+	// 运行时的 UsageTotals 总会显式传入 false/true，不会把中转漏报误当成零命中。
+	const metricsReported = t.cacheMetricsReported ?? true;
+	if (!metricsReported) {
+		if (t.turns >= NO_CACHE_WARN_TURNS && t.input >= NO_CACHE_WARN_INPUT) {
+			return { text: "CH?", warn: true };
+		}
+		return undefined;
+	}
 	if (t.cacheRead > 0 || t.cacheWrite > 0) {
 		return t.lastCacheHit == null ? undefined : { text: `CH${t.lastCacheHit.toFixed(1)}%`, warn: false };
 	}
@@ -128,6 +139,8 @@ export class UsageTotals {
 	/** 已计入的助手回合数，用于判断「没有缓存」是不是真的成了常态。 */
 	turns = 0;
 	lastCacheHit: number | undefined;
+	/** undefined=还没有 assistant 用量；false=至少一轮缺少完整缓存指标。 */
+	cacheMetricsReported: boolean | undefined;
 
 	reset(): void {
 		this.input = 0;
@@ -137,6 +150,7 @@ export class UsageTotals {
 		this.cost = 0;
 		this.turns = 0;
 		this.lastCacheHit = undefined;
+		this.cacheMetricsReported = undefined;
 	}
 
 	add(usage: {
@@ -146,8 +160,15 @@ export class UsageTotals {
 		cacheWrite?: number;
 		cost?: { total?: number };
 	}): void {
-		const cr = usage.cacheRead ?? 0;
-		const cw = usage.cacheWrite ?? 0;
+		const hasCacheMetrics =
+			typeof usage.cacheRead === "number" && Number.isFinite(usage.cacheRead) &&
+			typeof usage.cacheWrite === "number" && Number.isFinite(usage.cacheWrite);
+		this.cacheMetricsReported =
+			this.cacheMetricsReported === undefined
+				? hasCacheMetrics
+				: this.cacheMetricsReported && hasCacheMetrics;
+		const cr = typeof usage.cacheRead === "number" && Number.isFinite(usage.cacheRead) ? usage.cacheRead : 0;
+		const cw = typeof usage.cacheWrite === "number" && Number.isFinite(usage.cacheWrite) ? usage.cacheWrite : 0;
 		this.input += usage.input ?? 0;
 		this.output += usage.output ?? 0;
 		this.cacheRead += cr;
@@ -452,8 +473,11 @@ export default function registerFooter(pi: ExtensionAPI): void {
 		if (!noCacheWarned && formatCacheHit(totals)?.warn === true) {
 			noCacheWarned = true;
 			try {
+				const unknown = totals.cacheMetricsReported === false;
 				ctx.ui.notify(
-					"当前通道没有任何提示缓存命中：每一轮都在全价重发整个上下文，花费随轮数平方增长。考虑及早压缩上下文、把探索交给子代理，或换一条支持缓存的通道。",
+					unknown
+						? "当前通道未上报完整的提示缓存指标，暂时无法判断是否命中；若确实未命中，每一轮都在全价重发上下文。考虑及早压缩上下文、把探索交给子代理，或换一条支持缓存的通道。"
+						: "当前通道没有提示缓存命中：每一轮都在全价重发整个上下文，花费随轮数平方增长。考虑及早压缩上下文、把探索交给子代理，或换一条支持缓存的通道。",
 					"warning",
 				);
 			} catch {

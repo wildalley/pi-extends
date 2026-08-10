@@ -31,13 +31,24 @@ test("轮数不够时不告警，哪怕输入量已经很大", () => {
 });
 
 test("多轮全价重发且零命中时告警", () => {
-	const view = formatCacheHit({ ...base, input: NO_CACHE_WARN_INPUT, turns: NO_CACHE_WARN_TURNS });
+	const view = formatCacheHit({ ...base, input: NO_CACHE_WARN_INPUT, turns: NO_CACHE_WARN_TURNS, cacheMetricsReported: true });
 	assert.equal(view?.text, "CH0%");
 	assert.equal(view?.warn, true);
 });
 
 // 这是最贵的那种故障：不显示等于「一切正常」，所以零命中必须显示出来。
 test("零命中的告警优先于「没有缓存段就不显示」的老行为", () => {
-	const quiet = formatCacheHit({ ...base, input: NO_CACHE_WARN_INPUT, turns: NO_CACHE_WARN_TURNS });
+	const quiet = formatCacheHit({ ...base, input: NO_CACHE_WARN_INPUT, turns: NO_CACHE_WARN_TURNS, cacheMetricsReported: true });
 	assert.notEqual(quiet, undefined);
+});
+
+test("中转未上报缓存字段时显示未知，而不是伪装成 CH0%", () => {
+	const view = formatCacheHit({
+		...base,
+		input: NO_CACHE_WARN_INPUT,
+		turns: NO_CACHE_WARN_TURNS,
+		cacheMetricsReported: false,
+	});
+	assert.equal(view?.text, "CH?");
+	assert.equal(view?.warn, true);
 });
